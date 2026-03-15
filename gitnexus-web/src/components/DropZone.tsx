@@ -1,14 +1,31 @@
 import { useState, useCallback, useRef, DragEvent } from 'react';
-import { Upload, FileArchive, Github, Loader2, ArrowRight, Key, Eye, EyeOff, Globe, X, Database, ArrowLeft, FolderOpen } from 'lucide-react';
+import { Upload, FileArchive, Github, Loader2, ArrowRight, Key, Eye, EyeOff, Globe, X, Database, ArrowLeft, FolderOpen, RefreshCw, Trash2 } from 'lucide-react';
 import { cloneRepository, parseGitHubUrl } from '../services/git-clone';
-import { connectToServer, fetchRepos, normalizeServerUrl, type ConnectToServerResult, type RepoSummary } from '../services/server-connection';
+import { connectToServer, fetchRepos, normalizeServerUrl, reindexRepo, deleteRepo, type ConnectToServerResult, type RepoSummary } from '../services/server-connection';
 import { FileEntry } from '../services/zip';
 import { shouldIgnorePath } from '../config/ignore-service';
+
+function formatRelativeDate(dateStr: string): string {
+  if (!dateStr) return '';
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return '';
+  const now = Date.now();
+  const diff = now - date.getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  return date.toLocaleDateString();
+}
 
 interface DropZoneProps {
   onFileSelect: (file: File) => void;
   onGitClone?: (files: FileEntry[]) => void;
   onServerConnect?: (result: ConnectToServerResult, serverUrl?: string) => void;
+  isModal?: boolean;
 }
 
 function formatBytes(bytes: number): string {
@@ -20,7 +37,7 @@ function formatBytes(bytes: number): string {
 // Check if File System Access API is available
 const hasDirectoryPicker = typeof window !== 'undefined' && 'showDirectoryPicker' in window;
 
-export const DropZone = ({ onFileSelect, onGitClone, onServerConnect }: DropZoneProps) => {
+export const DropZone = ({ onFileSelect, onGitClone, onServerConnect, isModal }: DropZoneProps) => {
   const [isDragging, setIsDragging] = useState(false);
   const [activeTab, setActiveTab] = useState<'zip' | 'github' | 'local' | 'server'>('zip');
   const [githubUrl, setGithubUrl] = useState('');
@@ -306,12 +323,14 @@ export const DropZone = ({ onFileSelect, onGitClone, onServerConnect }: DropZone
     : null;
 
   return (
-    <div className="flex items-center justify-center min-h-screen p-8 bg-void">
+    <div className={`flex items-center justify-center p-8 bg-void ${isModal ? 'py-10' : 'min-h-screen'}`}>
       {/* Background gradient effects */}
-      <div className="fixed inset-0 pointer-events-none">
-        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-accent/10 rounded-full blur-3xl" />
-        <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-node-interface/10 rounded-full blur-3xl" />
-      </div>
+      {!isModal && (
+        <div className="fixed inset-0 pointer-events-none">
+          <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-accent/10 rounded-full blur-3xl" />
+          <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-node-interface/10 rounded-full blur-3xl" />
+        </div>
+      )}
 
       <div className="relative w-full max-w-lg">
         {/* Tab Switcher */}
@@ -671,22 +690,64 @@ export const DropZone = ({ onFileSelect, onGitClone, onServerConnect }: DropZone
 
                 <div className="space-y-2 max-h-80 overflow-y-auto scrollbar-thin">
                   {serverRepos.map((repo) => (
-                    <button
+                    <div
                       key={repo.name}
-                      onClick={() => handleSelectRepo(repo.name)}
-                      className="w-full p-4 bg-elevated border border-border-subtle rounded-xl hover:border-accent/50 hover:bg-hover transition-all text-left group"
+                      className="p-4 bg-elevated border border-border-subtle rounded-xl hover:border-accent/50 hover:bg-hover transition-all group"
                     >
                       <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 flex items-center justify-center bg-accent/15 rounded-lg shrink-0 group-hover:bg-accent/25 transition-colors">
-                          <Database className="w-5 h-5 text-accent" />
+                        <button
+                          onClick={() => handleSelectRepo(repo.name)}
+                          className="flex items-center gap-3 flex-1 min-w-0 text-left"
+                        >
+                          <div className="w-10 h-10 flex items-center justify-center bg-accent/15 rounded-lg shrink-0 group-hover:bg-accent/25 transition-colors">
+                            <Database className="w-5 h-5 text-accent" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-text-primary truncate">{repo.name}</p>
+                            <p className="text-[10px] text-text-muted truncate">{repo.path}</p>
+                          </div>
+                          <ArrowRight className="w-4 h-4 text-text-muted opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+                        </button>
+                        {/* Re-index & Delete */}
+                        <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              if (!connectedServerUrl) return;
+                              try {
+                                const baseUrl = normalizeServerUrl(connectedServerUrl);
+                                await reindexRepo(baseUrl, repo.name);
+                              } catch (err: any) {
+                                console.warn('Re-index failed:', err);
+                              }
+                            }}
+                            className="w-8 h-8 flex items-center justify-center rounded-lg text-text-muted hover:text-accent hover:bg-accent/10 transition-colors"
+                            title="Re-index"
+                          >
+                            <RefreshCw className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              if (!connectedServerUrl) return;
+                              try {
+                                const baseUrl = normalizeServerUrl(connectedServerUrl);
+                                await deleteRepo(baseUrl, repo.name);
+                                // Refresh the repo list
+                                const updated = await fetchRepos(baseUrl);
+                                setServerRepos(updated);
+                              } catch (err: any) {
+                                console.warn('Delete failed:', err);
+                              }
+                            }}
+                            className="w-8 h-8 flex items-center justify-center rounded-lg text-text-muted hover:text-red-400 hover:bg-red-400/10 transition-colors"
+                            title="Remove from registry"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
                         </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-text-primary truncate">{repo.name}</p>
-                          <p className="text-[10px] text-text-muted truncate">{repo.path}</p>
-                        </div>
-                        <ArrowRight className="w-4 h-4 text-text-muted opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
                       </div>
-                      <div className="flex items-center gap-3 mt-2 ml-13">
+                      <div className="flex items-center flex-wrap gap-2 mt-2 ml-13">
                         <span className="text-[10px] text-text-muted px-2 py-0.5 bg-surface rounded">
                           {repo.stats.files} files
                         </span>
@@ -701,8 +762,13 @@ export const DropZone = ({ onFileSelect, onGitClone, onServerConnect }: DropZone
                             {repo.stats.communities} clusters
                           </span>
                         )}
+                        {repo.indexedAt && (
+                          <span className="text-[10px] text-text-muted px-2 py-0.5 bg-surface rounded" title={new Date(repo.indexedAt).toLocaleString()}>
+                            indexed {formatRelativeDate(repo.indexedAt)}
+                          </span>
+                        )}
                       </div>
-                    </button>
+                    </div>
                   ))}
                 </div>
               </>

@@ -79,9 +79,9 @@ The current DropZone is a one-time onboarding screen. Transform it into a persis
 - [x] Single-repo servers skip the picker and load directly
 - [x] Back button to return to repo list from loading state
 - [x] Remember last-used server URL (already in localStorage)
-- [ ] "Add New Repository" button opens the current DropZone as a modal/section
-- [ ] Show repo health badge (from cached health report, if available)
-- [ ] Show last indexed date and language breakdown on cards
+- [x] "Add New Repository" button opens the current DropZone as a modal/section
+- [x] Show repo health badge (computed from stats; full report-backed badge deferred to server-side storage)
+- [x] Show last indexed date on cards
 
 ### 2.2 Multiple Repo Input Methods ~~DONE~~
 - [x] ZIP upload (drag & drop)
@@ -94,14 +94,14 @@ The current DropZone is a one-time onboarding screen. Transform it into a persis
   - [x] `showDirectoryPicker()` in Chrome/Edge (tab hidden if unsupported)
   - [x] Reads files directly in browser, skips ignored paths and binaries
   - [x] Live file count during reading
-  - [ ] Server mode: POST path to server, server indexes and returns graph
-- [ ] GitLab / Bitbucket URL support
+  - [x] Server mode: POST path to server, server indexes and returns graph (`POST /api/index-path`)
+- ~~GitLab / Bitbucket URL support~~ (not needed)
 
 ### 2.3 Repo Switching UX
 - [x] Repo switcher dropdown in header (server mode)
-- [ ] Repo switcher works without server (for ZIP-uploaded repos, keep in memory)
-- [ ] "Re-index" button per repo (re-runs analysis, updates graph)
-- [ ] "Delete" repo from registry
+- [x] Repo switcher works without server (for ZIP-uploaded repos, keep in memory)
+- [x] "Re-index" button per repo (re-runs analysis, updates graph)
+- [x] "Delete" repo from registry
 
 ---
 
@@ -110,27 +110,34 @@ The current DropZone is a one-time onboarding screen. Transform it into a persis
 ### 3.1 Nexus Server Enhancements
 - [x] Multi-repo support via registry
 - [x] KuzuDB connection pooling (max 5, auto-evict after 5 min)
-- [ ] Background indexing queue (index repos without blocking the API)
-- [ ] Webhook endpoint for CI/CD (auto-re-index on push)
-- [ ] WebSocket support for real-time indexing progress
-- [ ] Server health endpoint (`GET /api/health`)
-- [ ] Configurable CORS origins (currently hardcoded)
-- [ ] Rate limiting
+- [x] Background indexing queue (index repos without blocking the API)
+- [x] Webhook endpoint for CI/CD (auto-re-index on push)
+- [x] WebSocket support for real-time indexing progress
+- [x] Server health endpoint (`GET /api/health`)
+- [x] Configurable CORS origins (`GITNEXUS_CORS_ORIGINS` env var or `--cors-origins` flag)
+- [x] Rate limiting (200 req/min API, 10 req/min webhooks)
 
-### 3.2 Authentication & Multi-User
-- [ ] Auth system (JWT-based, simple email/password or SSO)
-- [ ] Per-user repo access controls
-- [ ] Shared reports (team can view saved reports)
-- [ ] Audit log (who viewed/analyzed what)
-- [ ] User settings synced to server (LLM provider config per user)
-
-> **Note:** Auth is deliberately last. The tool needs to be valuable to one user first before adding multi-user complexity.
+### 3.2 Authentication & Multi-User ~~DONE~~
+- [x] Auth system (JWT-based, email/password)
+- [x] First-run setup flow (first user becomes admin)
+- [x] User roles: admin, user
+- [x] Admin panel: add/delete/suspend users, reset passwords, toggle roles
+- [x] Per-user repo access controls (grant/revoke per repo, bulk assign)
+- [x] Repo filtering (users only see repos they have access to)
+- [x] Audit log (login, user CRUD, repo access changes — filterable by user/action)
+- [x] User settings synced to server (LLM provider config per user)
+- [x] Token refresh with rotation (7-day refresh tokens)
+- [x] Login page with setup/login modes
+- [x] User menu in header (display name, logout)
+- [x] Admin button in header (shield icon, admin-only)
+- ~~SSO~~ (not needed for self-hosted)
+- [ ] Shared reports (team can view saved reports) — deferred to Phase 4
 
 ### 3.3 Persistent Storage
-- [ ] localStorage persistence for saved reports
-- [ ] Server-side report storage (POST/GET reports via API)
-- [ ] Report versioning (re-generate and compare)
-- [ ] Export reports as PDF/HTML
+- [x] localStorage persistence for saved reports
+- [x] Server-side report storage (CRUD at `/api/reports`, stored in `.gitnexus/reports/`)
+- [x] Report versioning (auto-increments on same type+title, version history via `/api/reports/versions/:type/:title`)
+- [x] Export reports as HTML (server: `/api/reports/:id/html`, client: HTML download button alongside Markdown)
 
 ---
 

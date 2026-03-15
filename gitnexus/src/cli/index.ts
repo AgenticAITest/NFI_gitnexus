@@ -35,6 +35,7 @@ program
   .description('Start local HTTP server for web UI connection')
   .option('-p, --port <port>', 'Port number', '4747')
   .option('--host <host>', 'Bind address (default: 127.0.0.1, use 0.0.0.0 for remote access)')
+  .option('--cors-origins <origins>', 'Additional CORS origins (comma-separated)')
   .action(createLazyAction(() => import('./serve.js'), 'serveCommand'));
 
 program

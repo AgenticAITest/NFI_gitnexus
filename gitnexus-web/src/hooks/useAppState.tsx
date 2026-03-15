@@ -120,6 +120,10 @@ interface AppState {
   setAvailableRepos: (repos: RepoSummary[]) => void;
   switchRepo: (repoName: string) => Promise<void>;
 
+  // Local (non-server) repo cache for ZIP/GitHub/folder uploads
+  saveLocalRepo: (name: string, graph: KnowledgeGraph, fileContents: Map<string, string>) => void;
+  switchLocalRepo: (name: string) => void;
+
   // Worker API (shared across app)
   runPipeline: (file: File, onProgress: (p: PipelineProgress) => void, clusteringConfig?: ProviderConfig) => Promise<PipelineResult>;
   runPipelineFromFiles: (files: FileEntry[], onProgress: (p: PipelineProgress) => void, clusteringConfig?: ProviderConfig) => Promise<PipelineResult>;
@@ -144,6 +148,10 @@ interface AppState {
   updateLLMSettings: (updates: Partial<LLMSettings>) => void;
   isSettingsPanelOpen: boolean;
   setSettingsPanelOpen: (open: boolean) => void;
+
+  // Add Repo modal
+  isAddRepoModalOpen: boolean;
+  setAddRepoModalOpen: (open: boolean) => void;
   isAgentReady: boolean;
   isAgentInitializing: boolean;
   agentError: string | null;
@@ -290,6 +298,9 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
   const [serverBaseUrl, setServerBaseUrl] = useState<string | null>(null);
   const [availableRepos, setAvailableRepos] = useState<RepoSummary[]>([]);
 
+  // Local repo cache (ZIP/GitHub/folder uploads kept in memory)
+  const localRepoCache = useRef<Map<string, { graph: KnowledgeGraph; fileContents: Map<string, string> }>>(new Map());
+
   // Embedding state
   const [embeddingStatus, setEmbeddingStatus] = useState<EmbeddingStatus>('idle');
   const [embeddingProgress, setEmbeddingProgress] = useState<EmbeddingProgress | null>(null);
@@ -297,6 +308,7 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
   // LLM/Agent state
   const [llmSettings, setLLMSettings] = useState<LLMSettings>(loadSettings);
   const [isSettingsPanelOpen, setSettingsPanelOpen] = useState(false);
+  const [isAddRepoModalOpen, setAddRepoModalOpen] = useState(false);
   const [isAgentReady, setIsAgentReady] = useState(false);
   const [isAgentInitializing, setIsAgentInitializing] = useState(false);
   const [agentError, setAgentError] = useState<string | null>(null);
@@ -1024,9 +1036,27 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     setActiveReport(prev => prev?.id === reportId ? null : prev);
   }, []);
 
-  // Switch to a different repo on the connected server
+  // Switch to a different repo on the connected server (or local cache)
   const switchRepo = useCallback(async (repoName: string) => {
-    if (!serverBaseUrl) return;
+    // If no server, try local cache
+    if (!serverBaseUrl) {
+      const cached = localRepoCache.current.get(repoName);
+      if (cached) {
+        setHighlightedNodeIds(new Set());
+        clearAIToolHighlights();
+        clearBlastRadius();
+        setSelectedNode(null);
+        setQueryResult(null);
+        setCodeReferences([]);
+        setCodePanelOpen(false);
+        setCodeReferenceFocus(null);
+        setProjectName(repoName);
+        setGraph(cached.graph);
+        setFileContents(cached.fileContents);
+        if (getActiveProviderConfig()) initializeAgent(repoName);
+      }
+      return;
+    }
 
     setProgress({ phase: 'extracting', percent: 0, message: 'Switching repository...', detail: `Loading ${repoName}` });
     setViewMode('loading');
@@ -1090,6 +1120,53 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
       setTimeout(() => { setViewMode('exploring'); setProgress(null); }, 3000);
     }
   }, [serverBaseUrl, setProgress, setViewMode, setProjectName, setGraph, setFileContents, initializeAgent, startEmbeddings, setHighlightedNodeIds, clearAIToolHighlights, clearBlastRadius, setSelectedNode, setQueryResult, setCodeReferences, setCodePanelOpen, setCodeReferenceFocus]);
+
+  // Save current repo to local cache (for ZIP/GitHub/folder repos)
+  const saveLocalRepo = useCallback((name: string, repoGraph: KnowledgeGraph, repoFileContents: Map<string, string>) => {
+    localRepoCache.current.set(name, { graph: repoGraph, fileContents: repoFileContents });
+    // Add to availableRepos if not from server and not already present
+    if (!serverBaseUrl) {
+      setAvailableRepos(prev => {
+        if (prev.some(r => r.name === name)) return prev;
+        return [...prev, {
+          name,
+          path: '(local)',
+          indexedAt: new Date().toISOString(),
+          lastCommit: '',
+          stats: {
+            files: repoGraph.nodes.filter(n => n.label === 'File').length,
+            nodes: repoGraph.nodes.length,
+            edges: repoGraph.relationships.length,
+            communities: 0,
+            processes: 0,
+          },
+        }];
+      });
+    }
+  }, [serverBaseUrl, setAvailableRepos]);
+
+  // Switch to a locally cached repo (no server needed)
+  const switchLocalRepo = useCallback((name: string) => {
+    const cached = localRepoCache.current.get(name);
+    if (!cached) return;
+
+    // Clear stale state
+    setHighlightedNodeIds(new Set());
+    clearAIToolHighlights();
+    clearBlastRadius();
+    setSelectedNode(null);
+    setQueryResult(null);
+    setCodeReferences([]);
+    setCodePanelOpen(false);
+    setCodeReferenceFocus(null);
+
+    setProjectName(name);
+    setGraph(cached.graph);
+    setFileContents(cached.fileContents);
+    setViewMode('exploring');
+
+    if (getActiveProviderConfig()) initializeAgent(name);
+  }, [setProjectName, setGraph, setFileContents, setViewMode, initializeAgent, setHighlightedNodeIds, clearAIToolHighlights, clearBlastRadius, setSelectedNode, setQueryResult, setCodeReferences, setCodePanelOpen, setCodeReferenceFocus]);
 
   const removeCodeReference = useCallback((id: string) => {
     setCodeReferences(prev => {
@@ -1190,6 +1267,8 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     availableRepos,
     setAvailableRepos,
     switchRepo,
+    saveLocalRepo,
+    switchLocalRepo,
     runPipeline,
     runPipelineFromFiles,
     runQuery,
@@ -1208,6 +1287,8 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     updateLLMSettings,
     isSettingsPanelOpen,
     setSettingsPanelOpen,
+    isAddRepoModalOpen,
+    setAddRepoModalOpen,
     isAgentReady,
     isAgentInitializing,
     agentError,

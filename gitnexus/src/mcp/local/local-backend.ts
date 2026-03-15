@@ -104,7 +104,7 @@ export class LocalBackend {
    * New repos are added, existing repos are updated, removed repos are pruned.
    * KuzuDB connections for removed repos are NOT closed (they idle-timeout naturally).
    */
-  private async refreshRepos(): Promise<void> {
+  async refreshRepos(): Promise<void> {
     const entries = await listRegisteredRepos({ validate: true });
     const freshIds = new Set<string>();
 

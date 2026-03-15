@@ -20,6 +20,7 @@ import {
   TestTube2,
   Trash2,
   Download,
+  FileDown,
   Wrench,
   BookOpen,
   Code2,
@@ -202,6 +203,43 @@ const getNodeTypeIcon = (label: NodeLabel) => {
 
 interface FileTreePanelProps {
   onFocusNode: (nodeId: string) => void;
+}
+
+/** Generate a standalone HTML page from a Markdown report */
+function reportToHTML(title: string, type: string, content: string, createdAt: number): string {
+  let body = content
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/^#### (.+)$/gm, '<h4>$1</h4>')
+    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+    .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code class="language-$1">$2</code></pre>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/^- (.+)$/gm, '<li>$1</li>')
+    .replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>')
+    .replace(/^(?!<[huplo])(.*\S.*)$/gm, '<p>$1</p>')
+    .replace(/\n{2,}/g, '\n');
+
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${title} - GitNexus Report</title>
+<style>
+:root{--bg:#0f172a;--surface:#1e293b;--border:#334155;--text:#e2e8f0;--muted:#94a3b8;--accent:#22d3ee}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);line-height:1.7;padding:2rem;max-width:900px;margin:0 auto}
+h1{font-size:1.8rem;margin:1.5rem 0 .5rem;color:var(--accent)}h2{font-size:1.4rem;margin:1.5rem 0 .5rem;border-bottom:1px solid var(--border);padding-bottom:.3rem}
+h3{font-size:1.1rem;margin:1.2rem 0 .4rem;color:#cbd5e1}h4{font-size:1rem;margin:1rem 0 .3rem;color:#94a3b8}
+p{margin:.5rem 0}ul{margin:.5rem 0 .5rem 1.5rem}li{margin:.2rem 0}
+code{background:var(--surface);padding:.15rem .4rem;border-radius:4px;font-size:.9em;color:var(--accent)}
+pre{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:1rem;overflow-x:auto;margin:.8rem 0}pre code{background:none;padding:0;color:var(--text)}
+strong{color:#f8fafc}.meta{color:var(--muted);font-size:.85rem;margin-bottom:2rem;padding-bottom:1rem;border-bottom:1px solid var(--border)}
+@media print{body{background:#fff;color:#1e293b}h1{color:#0891b2}code{color:#0891b2}pre{border-color:#e2e8f0}.meta{color:#64748b}}
+</style></head><body>
+<div class="meta"><strong>${title}</strong> &middot; ${type} report<br>Generated: ${new Date(createdAt).toLocaleString()}<br><em>Exported from GitNexus</em></div>
+${body}
+</body></html>`;
 }
 
 export const FileTreePanel = ({ onFocusNode }: FileTreePanelProps) => {
@@ -591,6 +629,23 @@ export const FileTreePanel = ({ onFocusNode }: FileTreePanelProps) => {
                             title="Download as Markdown"
                           >
                             <Download className="w-3 h-3" />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const html = reportToHTML(report.title, report.type, report.content, report.createdAt);
+                              const blob = new Blob([html], { type: 'text/html' });
+                              const url = URL.createObjectURL(blob);
+                              const a = document.createElement('a');
+                              a.href = url;
+                              a.download = `${report.title.replace(/[^a-zA-Z0-9-_ ]/g, '')}-${new Date(report.createdAt).toISOString().slice(0, 10)}.html`;
+                              a.click();
+                              URL.revokeObjectURL(url);
+                            }}
+                            className="p-1 text-text-muted hover:text-emerald-400 opacity-0 group-hover:opacity-100 transition-all"
+                            title="Download as HTML"
+                          >
+                            <FileDown className="w-3 h-3" />
                           </button>
                           <button
                             onClick={(e) => { e.stopPropagation(); deleteReport(report.id); }}

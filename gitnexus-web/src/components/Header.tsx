@@ -1,9 +1,36 @@
-import { Search, Settings, HelpCircle, Sparkles, Github, Star, ChevronDown } from 'lucide-react';
+import { Search, Settings, HelpCircle, Sparkles, Github, Star, ChevronDown, Plus, RefreshCw, Trash2, Shield, LogOut, User } from 'lucide-react';
 import { useAppState } from '../hooks/useAppState';
 import type { RepoSummary } from '../services/server-connection';
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { GraphNode } from '../core/graph/types';
 import { EmbeddingStatus } from './EmbeddingStatus';
+
+function formatRelativeDate(dateStr: string): string {
+  if (!dateStr) return '';
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return '';
+  const now = Date.now();
+  const diff = now - date.getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  return date.toLocaleDateString();
+}
+
+/** Simple health indicator based on repo stats (placeholder until server-side report caching) */
+function getHealthBadge(stats?: RepoSummary['stats']): { label: string; color: string } | null {
+  if (!stats || !stats.nodes) return null;
+  // Heuristic: repos with communities and processes are well-structured
+  const hasClusters = (stats.communities ?? 0) > 0;
+  const hasProcesses = (stats.processes ?? 0) > 0;
+  if (hasClusters && hasProcesses) return { label: 'Good', color: 'bg-emerald-500' };
+  if (hasClusters || hasProcesses) return { label: 'Fair', color: 'bg-yellow-500' };
+  return { label: 'Basic', color: 'bg-orange-500' };
+}
 
 // Color mapping for node types in search results
 const NODE_TYPE_COLORS: Record<string, string> = {
@@ -18,13 +45,20 @@ const NODE_TYPE_COLORS: Record<string, string> = {
   Type: '#a78bfa',
 };
 
+import type { AuthUser } from '../services/auth';
+
 interface HeaderProps {
   onFocusNode?: (nodeId: string) => void;
   availableRepos?: RepoSummary[];
   onSwitchRepo?: (repoName: string) => void;
+  onReindexRepo?: (repoName: string) => void;
+  onDeleteRepo?: (repoName: string) => void;
+  authUser?: AuthUser | null;
+  onOpenAdmin?: () => void;
+  onLogout?: () => void;
 }
 
-export const Header = ({ onFocusNode, availableRepos = [], onSwitchRepo }: HeaderProps) => {
+export const Header = ({ onFocusNode, availableRepos = [], onSwitchRepo, onReindexRepo, onDeleteRepo, authUser, onOpenAdmin, onLogout }: HeaderProps) => {
   const {
     projectName,
     graph,
@@ -32,6 +66,7 @@ export const Header = ({ onFocusNode, availableRepos = [], onSwitchRepo }: Heade
     isRightPanelOpen,
     rightPanelTab,
     setSettingsPanelOpen,
+    setAddRepoModalOpen,
   } = useAppState();
   const [isRepoDropdownOpen, setIsRepoDropdownOpen] = useState(false);
   const repoDropdownRef = useRef<HTMLDivElement>(null);
@@ -140,36 +175,82 @@ export const Header = ({ onFocusNode, availableRepos = [], onSwitchRepo }: Heade
 
             {/* Repo dropdown */}
             {isRepoDropdownOpen && availableRepos.length >= 2 && (
-              <div className="absolute top-full left-0 mt-1 w-72 bg-surface border border-border-subtle rounded-lg shadow-xl overflow-hidden z-50">
+              <div className="absolute top-full left-0 mt-1 w-80 bg-surface border border-border-subtle rounded-lg shadow-xl overflow-hidden z-50">
                 {availableRepos.map((repo) => {
                   const isCurrent = repo.name === projectName;
+                  const health = getHealthBadge(repo.stats);
                   return (
-                    <button
+                    <div
                       key={repo.name}
-                      onClick={() => {
-                        if (!isCurrent && onSwitchRepo) {
-                          onSwitchRepo(repo.name);
-                        }
-                        setIsRepoDropdownOpen(false);
-                      }}
-                      className={`w-full px-4 py-3 flex items-center gap-3 text-left transition-colors ${isCurrent ? 'bg-accent/10 border-l-2 border-accent' : 'hover:bg-hover border-l-2 border-transparent'}`}
+                      className={`px-4 py-3 flex items-center gap-3 transition-colors ${isCurrent ? 'bg-accent/10 border-l-2 border-accent' : 'hover:bg-hover border-l-2 border-transparent'}`}
                     >
-                      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${isCurrent ? 'bg-node-function animate-pulse' : 'bg-text-muted'}`} />
-                      <div className="flex-1 min-w-0">
-                        <div className={`text-sm font-medium truncate ${isCurrent ? 'text-accent' : 'text-text-primary'}`}>
-                          {repo.name}
+                      <button
+                        className="flex-1 flex items-center gap-3 text-left min-w-0"
+                        onClick={() => {
+                          if (!isCurrent && onSwitchRepo) {
+                            onSwitchRepo(repo.name);
+                          }
+                          setIsRepoDropdownOpen(false);
+                        }}
+                      >
+                        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${isCurrent ? 'bg-node-function animate-pulse' : 'bg-text-muted'}`} />
+                        <div className="flex-1 min-w-0">
+                          <div className={`text-sm font-medium truncate flex items-center gap-2 ${isCurrent ? 'text-accent' : 'text-text-primary'}`}>
+                            {repo.name}
+                            {health && (
+                              <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium text-white ${health.color}`}>
+                                {health.label}
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-xs text-text-muted mt-0.5">
+                            {repo.stats?.nodes ?? '?'} nodes &middot; {repo.stats?.files ?? '?'} files
+                            {repo.indexedAt && (
+                              <span className="ml-1" title={new Date(repo.indexedAt).toLocaleString()}>
+                                &middot; {formatRelativeDate(repo.indexedAt)}
+                              </span>
+                            )}
+                          </div>
                         </div>
-                        <div className="text-xs text-text-muted mt-0.5">
-                          {repo.stats?.nodes ?? '?'} nodes &middot; {repo.stats?.files ?? '?'} files
-                        </div>
+                      </button>
+                      {/* Action buttons */}
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        {onReindexRepo && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); onReindexRepo(repo.name); setIsRepoDropdownOpen(false); }}
+                            className="w-7 h-7 flex items-center justify-center rounded text-text-muted hover:text-accent hover:bg-accent/10 transition-colors"
+                            title="Re-index"
+                          >
+                            <RefreshCw className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                        {onDeleteRepo && !isCurrent && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); onDeleteRepo(repo.name); setIsRepoDropdownOpen(false); }}
+                            className="w-7 h-7 flex items-center justify-center rounded text-text-muted hover:text-red-400 hover:bg-red-400/10 transition-colors"
+                            title="Remove from registry"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
-                    </button>
+                    </div>
                   );
                 })}
               </div>
             )}
           </div>
         )}
+
+        {/* Add Repository button */}
+        <button
+          onClick={() => setAddRepoModalOpen(true)}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 bg-surface border border-border-subtle rounded-lg text-sm text-text-secondary hover:bg-hover hover:text-text-primary hover:border-accent/40 transition-colors"
+          title="Add New Repository"
+        >
+          <Plus className="w-4 h-4" />
+          <span className="hidden lg:inline">Add Repo</span>
+        </button>
       </div>
 
       {/* Center - Search */}
@@ -271,6 +352,34 @@ export const Header = ({ onFocusNode, availableRepos = [], onSwitchRepo }: Heade
         <button className="w-9 h-9 flex items-center justify-center rounded-md text-text-secondary hover:bg-hover hover:text-text-primary transition-colors">
           <HelpCircle className="w-[18px] h-[18px]" />
         </button>
+
+        {/* Admin button */}
+        {onOpenAdmin && (
+          <button
+            onClick={onOpenAdmin}
+            className="w-9 h-9 flex items-center justify-center rounded-md text-text-secondary hover:bg-hover hover:text-accent transition-colors"
+            title="Admin Panel"
+          >
+            <Shield className="w-[18px] h-[18px]" />
+          </button>
+        )}
+
+        {/* User / Logout */}
+        {authUser && (
+          <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-surface border border-border-subtle">
+            <User className="w-3.5 h-3.5 text-text-muted" />
+            <span className="text-xs text-text-secondary max-w-[100px] truncate">{authUser.displayName}</span>
+            {onLogout && (
+              <button
+                onClick={onLogout}
+                className="w-6 h-6 flex items-center justify-center rounded text-text-muted hover:text-red-400 transition-colors"
+                title="Logout"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        )}
 
         {/* AI Button */}
         <button

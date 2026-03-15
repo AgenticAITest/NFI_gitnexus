@@ -1,4 +1,11 @@
 import { GraphNode, GraphRelationship } from '../core/graph/types';
+import { getStoredTokens } from './auth';
+
+/** Build auth headers from stored token (if any) */
+function authHeaders(): Record<string, string> {
+  const { accessToken } = getStoredTokens();
+  return accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
+}
 
 export interface RepoSummary {
   name: string;
@@ -58,14 +65,14 @@ export function normalizeServerUrl(input: string): string {
 }
 
 export async function fetchRepos(baseUrl: string): Promise<RepoSummary[]> {
-  const response = await fetch(`${baseUrl}/repos`);
+  const response = await fetch(`${baseUrl}/repos`, { headers: authHeaders() });
   if (!response.ok) throw new Error(`Server returned ${response.status}`);
   return response.json();
 }
 
 export async function fetchRepoInfo(baseUrl: string, repoName?: string): Promise<ServerRepoInfo> {
   const url = repoName ? `${baseUrl}/repo?repo=${encodeURIComponent(repoName)}` : `${baseUrl}/repo`;
-  const response = await fetch(url);
+  const response = await fetch(url, { headers: authHeaders() });
   if (!response.ok) {
     throw new Error(`Server returned ${response.status}: ${response.statusText}`);
   }
@@ -81,7 +88,7 @@ export async function fetchGraph(
   repoName?: string
 ): Promise<{ nodes: GraphNode[]; relationships: GraphRelationship[] }> {
   const url = repoName ? `${baseUrl}/graph?repo=${encodeURIComponent(repoName)}` : `${baseUrl}/graph`;
-  const response = await fetch(url, { signal });
+  const response = await fetch(url, { signal, headers: authHeaders() });
   if (!response.ok) {
     throw new Error(`Server returned ${response.status}: ${response.statusText}`);
   }
@@ -126,6 +133,109 @@ export function extractFileContents(nodes: GraphNode[]): Record<string, string> 
     }
   }
   return contents;
+}
+
+/** Delete a repo from the server registry */
+export async function deleteRepo(baseUrl: string, repoName: string, deleteData = false): Promise<void> {
+  const url = `${baseUrl}/repos/${encodeURIComponent(repoName)}${deleteData ? '?deleteData=true' : ''}`;
+  const response = await fetch(url, { method: 'DELETE', headers: authHeaders() });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error || `Server returned ${response.status}`);
+  }
+}
+
+/** Trigger re-index for a repo on the server */
+export async function reindexRepo(baseUrl: string, repoName: string): Promise<{ jobId: string }> {
+  const response = await fetch(`${baseUrl}/index`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ repo: repoName }),
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error || `Server returned ${response.status}`);
+  }
+  return response.json();
+}
+
+/** Index a local folder path via the server */
+export async function indexPath(baseUrl: string, folderPath: string): Promise<{ jobId?: string; nodes?: GraphNode[]; relationships?: GraphRelationship[]; repoInfo?: ServerRepoInfo }> {
+  const response = await fetch(`${baseUrl}/index-path`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ path: folderPath }),
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error || `Server returned ${response.status}`);
+  }
+  return response.json();
+}
+
+// ── Report API ───────────────────────────────────────────────────
+
+export interface ServerReport {
+  id: string;
+  type: string;
+  title: string;
+  content?: string;
+  repo: string;
+  version: number;
+  createdAt: string;
+}
+
+/** List reports for a repo (without content) */
+export async function listReports(baseUrl: string, repoName?: string, type?: string): Promise<ServerReport[]> {
+  const params = new URLSearchParams();
+  if (repoName) params.set('repo', repoName);
+  if (type) params.set('type', type);
+  const response = await fetch(`${baseUrl}/reports?${params}`, { headers: authHeaders() });
+  if (!response.ok) throw new Error(`Server returned ${response.status}`);
+  return response.json();
+}
+
+/** Get a single report with full content */
+export async function getReport(baseUrl: string, reportId: string, repoName?: string): Promise<ServerReport> {
+  const params = repoName ? `?repo=${encodeURIComponent(repoName)}` : '';
+  const response = await fetch(`${baseUrl}/reports/${encodeURIComponent(reportId)}${params}`, { headers: authHeaders() });
+  if (!response.ok) throw new Error(`Server returned ${response.status}`);
+  return response.json();
+}
+
+/** Save a report to the server (auto-versions) */
+export async function saveReportToServer(baseUrl: string, report: { type: string; title: string; content: string }, repoName?: string): Promise<{ id: string; version: number }> {
+  const response = await fetch(`${baseUrl}/reports`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ ...report, repo: repoName }),
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error || `Server returned ${response.status}`);
+  }
+  return response.json();
+}
+
+/** Delete a report from the server */
+export async function deleteServerReport(baseUrl: string, reportId: string, repoName?: string): Promise<void> {
+  const params = repoName ? `?repo=${encodeURIComponent(repoName)}` : '';
+  const response = await fetch(`${baseUrl}/reports/${encodeURIComponent(reportId)}${params}`, { method: 'DELETE', headers: authHeaders() });
+  if (!response.ok) throw new Error(`Server returned ${response.status}`);
+}
+
+/** Get version history for a report type+title */
+export async function getReportVersions(baseUrl: string, type: string, title: string, repoName?: string): Promise<ServerReport[]> {
+  const params = repoName ? `?repo=${encodeURIComponent(repoName)}` : '';
+  const response = await fetch(`${baseUrl}/reports/versions/${encodeURIComponent(type)}/${encodeURIComponent(title)}${params}`, { headers: authHeaders() });
+  if (!response.ok) throw new Error(`Server returned ${response.status}`);
+  return response.json();
+}
+
+/** Get HTML export URL for a report */
+export function getReportHtmlUrl(baseUrl: string, reportId: string, repoName?: string): string {
+  const params = repoName ? `?repo=${encodeURIComponent(repoName)}` : '';
+  return `${baseUrl}/reports/${encodeURIComponent(reportId)}/html${params}`;
 }
 
 export async function connectToServer(
