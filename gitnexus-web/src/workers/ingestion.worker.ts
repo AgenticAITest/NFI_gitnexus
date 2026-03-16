@@ -73,11 +73,13 @@ const httpFetchWithTimeout = async (
   }
 };
 
-const createHttpExecuteQuery = (backendUrl: string, repo: string) => {
+const createHttpExecuteQuery = (backendUrl: string, repo: string, authToken?: string) => {
   return async (cypher: string): Promise<any[]> => {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
     const response = await httpFetchWithTimeout(`${backendUrl}/api/query`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ cypher, repo }),
     });
     if (!response.ok) {
@@ -95,12 +97,14 @@ const createHttpExecuteQuery = (backendUrl: string, repo: string) => {
  * Results are flattened from the process-grouped response into the flat
  * array format expected by createGraphRAGTools.
  */
-const createHttpHybridSearch = (backendUrl: string, repo: string) => {
+const createHttpHybridSearch = (backendUrl: string, repo: string, authToken?: string) => {
   return async (query: string, k: number = 15): Promise<any[]> => {
     try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
       const response = await httpFetchWithTimeout(`${backendUrl}/api/search`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ query, limit: k, repo }),
       });
       if (!response.ok) {
@@ -668,15 +672,16 @@ const workerApi = {
     repoName: string,
     fileContentsEntries: [string, string][],
     projectName?: string,
+    authToken?: string,
   ): Promise<{ success: boolean; error?: string }> {
     try {
       // Rebuild Map from serializable entries (Comlink can't transfer Maps)
       const contents = new Map<string, string>(fileContentsEntries);
       storedFileContents = contents;
 
-      // Create HTTP-based tool wrappers
-      const executeQuery = createHttpExecuteQuery(backendUrl, repoName);
-      const hybridSearch = createHttpHybridSearch(backendUrl, repoName);
+      // Create HTTP-based tool wrappers (pass auth token for authenticated servers)
+      const executeQuery = createHttpExecuteQuery(backendUrl, repoName, authToken);
+      const hybridSearch = createHttpHybridSearch(backendUrl, repoName, authToken);
 
       // Build codebase context (uses Cypher queries — works via HTTP)
       let codebaseContext: CodebaseContext | undefined;

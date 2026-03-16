@@ -13,6 +13,7 @@ import type { AgentMessage } from '../core/llm/agent';
 import { DEFAULT_VISIBLE_EDGES, type EdgeType } from '../lib/constants';
 import type { RepoSummary, ConnectToServerResult } from '../services/server-connection';
 import { fetchRepos, connectToServer } from '../services/server-connection';
+import { getStoredTokens } from '../services/auth';
 
 export type ViewMode = 'onboarding' | 'loading' | 'exploring';
 export type RightPanelTab = 'code' | 'chat';
@@ -632,15 +633,31 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     setAgentError(null);
 
     try {
-      // Use override if provided (for fresh loads), fallback to state (for re-init)
       const effectiveProjectName = overrideProjectName || projectName || 'project';
-      // Timeout after 60s to avoid hanging forever (e.g., KuzuDB WASM issues)
-      const result = await Promise.race([
-        api.initializeAgent(config, effectiveProjectName),
-        new Promise<{ success: false; error: string }>((_, reject) =>
-          setTimeout(() => reject(new Error('Agent initialization timed out after 60s')), 60_000)
-        ),
-      ]);
+
+      let result: { success: boolean; error?: string };
+
+      if (serverBaseUrl) {
+        // Server mode — use HTTP-backed agent (no browser-side KuzuDB needed)
+        const fileEntries: [string, string][] = [];
+        fileContents.forEach((content, path) => fileEntries.push([path, content]));
+        const { accessToken } = getStoredTokens();
+        result = await Promise.race([
+          api.initializeBackendAgent(config, serverBaseUrl, effectiveProjectName, fileEntries, effectiveProjectName, accessToken ?? undefined),
+          new Promise<{ success: false; error: string }>((_, reject) =>
+            setTimeout(() => reject(new Error('Agent initialization timed out after 60s')), 60_000)
+          ),
+        ]);
+      } else {
+        // Local mode — use browser-side KuzuDB WASM
+        result = await Promise.race([
+          api.initializeAgent(config, effectiveProjectName),
+          new Promise<{ success: false; error: string }>((_, reject) =>
+            setTimeout(() => reject(new Error('Agent initialization timed out after 60s')), 60_000)
+          ),
+        ]);
+      }
+
       if (result.success) {
         setIsAgentReady(true);
         setAgentError(null);
@@ -658,7 +675,7 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     } finally {
       setIsAgentInitializing(false);
     }
-  }, [projectName]);
+  }, [projectName, serverBaseUrl, fileContents]);
 
   const sendChatMessage = useCallback(async (message: string, reportMeta?: { type: ReportType; title: string }): Promise<void> => {
     const api = apiRef.current;
@@ -1118,16 +1135,19 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
 
       setViewMode('exploring');
 
-      // Load graph into browser-side KuzuDB so AI chat tools work (timeout 90s)
-      try {
-        await Promise.race([
-          loadServerGraph(result.nodes, result.relationships, result.fileContents),
-          new Promise<void>((_, reject) =>
-            setTimeout(() => reject(new Error('KuzuDB load timed out after 90s')), 90_000)
-          ),
-        ]);
-      } catch (err) {
-        console.warn('Failed to load graph into browser KuzuDB:', err);
+      // In server mode, the backend agent uses HTTP queries — no need to load into browser KuzuDB.
+      // Skip the slow/hanging KuzuDB WASM load entirely.
+      if (!serverBaseUrl) {
+        try {
+          await Promise.race([
+            loadServerGraph(result.nodes, result.relationships, result.fileContents),
+            new Promise<void>((_, reject) =>
+              setTimeout(() => reject(new Error('KuzuDB load timed out after 90s')), 90_000)
+            ),
+          ]);
+        } catch (err) {
+          console.warn('Failed to load graph into browser KuzuDB:', err);
+        }
       }
 
       if (getActiveProviderConfig()) initializeAgent(pName);

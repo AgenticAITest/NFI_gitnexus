@@ -123,17 +123,7 @@ const AppContent = () => {
     for (const [p, content] of Object.entries(result.fileContents)) fileMap.set(p, content);
     setFileContents(fileMap);
     setViewMode('exploring');
-    // Load graph into browser-side KuzuDB so AI chat tools work (timeout 90s)
-    try {
-      await Promise.race([
-        loadServerGraph(result.nodes, result.relationships, result.fileContents),
-        new Promise<void>((_, reject) =>
-          setTimeout(() => reject(new Error('KuzuDB load timed out after 90s')), 90_000)
-        ),
-      ]);
-    } catch (err) {
-      console.warn('Failed to load graph into browser KuzuDB:', err);
-    }
+    // Server mode uses HTTP-backed agent — skip browser KuzuDB WASM load
     if (getActiveProviderConfig()) await initializeAgent(projectName);
     startEmbeddingsWithFallback();
   }, [setViewMode, setGraph, setFileContents, setProjectName, loadServerGraph, initializeAgent, startEmbeddingsWithFallback]);
