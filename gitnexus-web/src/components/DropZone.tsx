@@ -333,6 +333,12 @@ export const DropZone = ({ onFileSelect, onGitClone, onServerConnect, isModal }:
       )}
 
       <div className="relative w-full max-w-lg">
+        {/* Logo */}
+        <div className="flex items-center justify-center mb-6">
+          <img src="/CerebroNexus_darkbackground.png" alt="CerebroNexus" className="w-1/2 min-w-[200px] hidden dark:block" />
+          <img src="/CerebroNexus_lightbackground.png" alt="CerebroNexus" className="w-1/2 min-w-[200px] block dark:hidden" />
+        </div>
+
         {/* Tab Switcher */}
         <div className="flex mb-4 bg-surface border border-border-default rounded-xl p-1">
           <button

@@ -315,7 +315,7 @@ export const RightPanel = () => {
               }`}
           >
             <Sparkles className="w-3.5 h-3.5" />
-            <span>Nexus AI</span>
+            <span>Chat with AI</span>
           </button>
 
           {/* Processes Tab */}
@@ -495,7 +495,7 @@ export const RightPanel = () => {
                       <div>
                         <div className="flex items-center gap-2 mb-3">
                           <Sparkles className="w-4 h-4 text-accent" />
-                          <span className="text-xs font-medium text-text-muted uppercase tracking-wide">Nexus AI</span>
+                          <span className="text-xs font-medium text-text-muted uppercase tracking-wide">Chat with AI</span>
                           {isChatLoading && message === chatMessages[chatMessages.length - 1] && (
                             <Loader2 className="w-3 h-3 animate-spin text-accent" />
                           )}
@@ -664,7 +664,7 @@ export const RightPanel = () => {
               ) : (
                 <button
                   onClick={handleSendMessage}
-                  disabled={(!chatInput.trim() && !attachedFile) || isAgentInitializing}
+                  disabled={!chatInput.trim() && !attachedFile && !pendingReport}
                   className="w-9 h-9 flex items-center justify-center bg-accent rounded-md text-white transition-all hover:bg-accent-dim disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Send className="w-3.5 h-3.5" />

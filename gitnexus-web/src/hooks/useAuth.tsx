@@ -99,6 +99,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return u;
   }, [serverUrl]);
 
+  // Listen for auth-expired events (401 after refresh failure)
+  useEffect(() => {
+    const handleAuthExpired = () => {
+      clearAuth();
+      setUser(null);
+      setNeedsLogin(true);
+    };
+    window.addEventListener('auth-expired', handleAuthExpired);
+    return () => window.removeEventListener('auth-expired', handleAuthExpired);
+  }, []);
+
   const logoutFn = useCallback(async () => {
     if (serverUrl) await apiLogout(serverUrl);
     setUser(null);

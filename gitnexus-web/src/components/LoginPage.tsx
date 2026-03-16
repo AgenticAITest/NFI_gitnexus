@@ -27,11 +27,9 @@ export function LoginPage() {
     <div className="min-h-screen bg-void flex items-center justify-center p-4">
       <div className="w-full max-w-md">
         {/* Logo */}
-        <div className="flex items-center justify-center gap-3 mb-8">
-          <div className="w-10 h-10 flex items-center justify-center bg-gradient-to-br from-accent to-node-interface rounded-lg shadow-glow text-white text-lg font-bold">
-            ◇
-          </div>
-          <span className="text-2xl font-semibold tracking-tight text-text-primary">GitNexus</span>
+        <div className="flex items-center justify-center mb-8">
+          <img src="/CerebroNexus_darkbackground.png" alt="CerebroNexus" className="w-1/2 min-w-[200px] hidden dark:block" />
+          <img src="/CerebroNexus_lightbackground.png" alt="CerebroNexus" className="w-1/2 min-w-[200px] block dark:hidden" />
         </div>
 
         {/* Card */}

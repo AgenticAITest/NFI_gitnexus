@@ -162,6 +162,13 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
   }));
   app.use(express.json({ limit: '10mb' }));
 
+  // ── Cross-Origin Isolation headers (required for SharedArrayBuffer / KuzuDB WASM)
+  app.use((_req, res, next) => {
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+    res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
+    next();
+  });
+
   // ── Rate limiting ──────────────────────────────────────────────────
   // General API: 200 requests per minute per IP
   const apiLimiter = rateLimit({

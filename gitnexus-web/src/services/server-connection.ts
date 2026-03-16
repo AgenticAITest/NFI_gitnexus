@@ -1,10 +1,18 @@
 import { GraphNode, GraphRelationship } from '../core/graph/types';
-import { getStoredTokens } from './auth';
+import { getStoredTokens, emitAuthExpired } from './auth';
 
 /** Build auth headers from stored token (if any) */
 function authHeaders(): Record<string, string> {
   const { accessToken } = getStoredTokens();
   return accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
+}
+
+/** Fetch with auth headers, emits auth-expired on 401 */
+async function authedFetch(input: string, init?: RequestInit): Promise<Response> {
+  const headers = { ...authHeaders(), ...init?.headers };
+  const res = await fetch(input, { ...init, headers });
+  if (res.status === 401) emitAuthExpired();
+  return res;
 }
 
 export interface RepoSummary {
@@ -65,14 +73,14 @@ export function normalizeServerUrl(input: string): string {
 }
 
 export async function fetchRepos(baseUrl: string): Promise<RepoSummary[]> {
-  const response = await fetch(`${baseUrl}/repos`, { headers: authHeaders() });
+  const response = await authedFetch(`${baseUrl}/repos`);
   if (!response.ok) throw new Error(`Server returned ${response.status}`);
   return response.json();
 }
 
 export async function fetchRepoInfo(baseUrl: string, repoName?: string): Promise<ServerRepoInfo> {
   const url = repoName ? `${baseUrl}/repo?repo=${encodeURIComponent(repoName)}` : `${baseUrl}/repo`;
-  const response = await fetch(url, { headers: authHeaders() });
+  const response = await authedFetch(url);
   if (!response.ok) {
     throw new Error(`Server returned ${response.status}: ${response.statusText}`);
   }
@@ -88,7 +96,7 @@ export async function fetchGraph(
   repoName?: string
 ): Promise<{ nodes: GraphNode[]; relationships: GraphRelationship[] }> {
   const url = repoName ? `${baseUrl}/graph?repo=${encodeURIComponent(repoName)}` : `${baseUrl}/graph`;
-  const response = await fetch(url, { signal, headers: authHeaders() });
+  const response = await authedFetch(url, { signal });
   if (!response.ok) {
     throw new Error(`Server returned ${response.status}: ${response.statusText}`);
   }
@@ -138,7 +146,7 @@ export function extractFileContents(nodes: GraphNode[]): Record<string, string> 
 /** Delete a repo from the server registry */
 export async function deleteRepo(baseUrl: string, repoName: string, deleteData = false): Promise<void> {
   const url = `${baseUrl}/repos/${encodeURIComponent(repoName)}${deleteData ? '?deleteData=true' : ''}`;
-  const response = await fetch(url, { method: 'DELETE', headers: authHeaders() });
+  const response = await authedFetch(url, { method: 'DELETE' });
   if (!response.ok) {
     const data = await response.json().catch(() => ({}));
     throw new Error(data.error || `Server returned ${response.status}`);
@@ -147,9 +155,9 @@ export async function deleteRepo(baseUrl: string, repoName: string, deleteData =
 
 /** Trigger re-index for a repo on the server */
 export async function reindexRepo(baseUrl: string, repoName: string): Promise<{ jobId: string }> {
-  const response = await fetch(`${baseUrl}/index`, {
+  const response = await authedFetch(`${baseUrl}/index`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ repo: repoName }),
   });
   if (!response.ok) {
@@ -161,9 +169,9 @@ export async function reindexRepo(baseUrl: string, repoName: string): Promise<{ 
 
 /** Index a local folder path via the server */
 export async function indexPath(baseUrl: string, folderPath: string): Promise<{ jobId?: string; nodes?: GraphNode[]; relationships?: GraphRelationship[]; repoInfo?: ServerRepoInfo }> {
-  const response = await fetch(`${baseUrl}/index-path`, {
+  const response = await authedFetch(`${baseUrl}/index-path`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path: folderPath }),
   });
   if (!response.ok) {
@@ -190,7 +198,7 @@ export async function listReports(baseUrl: string, repoName?: string, type?: str
   const params = new URLSearchParams();
   if (repoName) params.set('repo', repoName);
   if (type) params.set('type', type);
-  const response = await fetch(`${baseUrl}/reports?${params}`, { headers: authHeaders() });
+  const response = await authedFetch(`${baseUrl}/reports?${params}`);
   if (!response.ok) throw new Error(`Server returned ${response.status}`);
   return response.json();
 }
@@ -198,16 +206,16 @@ export async function listReports(baseUrl: string, repoName?: string, type?: str
 /** Get a single report with full content */
 export async function getReport(baseUrl: string, reportId: string, repoName?: string): Promise<ServerReport> {
   const params = repoName ? `?repo=${encodeURIComponent(repoName)}` : '';
-  const response = await fetch(`${baseUrl}/reports/${encodeURIComponent(reportId)}${params}`, { headers: authHeaders() });
+  const response = await authedFetch(`${baseUrl}/reports/${encodeURIComponent(reportId)}${params}`);
   if (!response.ok) throw new Error(`Server returned ${response.status}`);
   return response.json();
 }
 
 /** Save a report to the server (auto-versions) */
 export async function saveReportToServer(baseUrl: string, report: { type: string; title: string; content: string }, repoName?: string): Promise<{ id: string; version: number }> {
-  const response = await fetch(`${baseUrl}/reports`, {
+  const response = await authedFetch(`${baseUrl}/reports`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ...report, repo: repoName }),
   });
   if (!response.ok) {
@@ -220,14 +228,14 @@ export async function saveReportToServer(baseUrl: string, report: { type: string
 /** Delete a report from the server */
 export async function deleteServerReport(baseUrl: string, reportId: string, repoName?: string): Promise<void> {
   const params = repoName ? `?repo=${encodeURIComponent(repoName)}` : '';
-  const response = await fetch(`${baseUrl}/reports/${encodeURIComponent(reportId)}${params}`, { method: 'DELETE', headers: authHeaders() });
+  const response = await authedFetch(`${baseUrl}/reports/${encodeURIComponent(reportId)}${params}`, { method: 'DELETE' });
   if (!response.ok) throw new Error(`Server returned ${response.status}`);
 }
 
 /** Get version history for a report type+title */
 export async function getReportVersions(baseUrl: string, type: string, title: string, repoName?: string): Promise<ServerReport[]> {
   const params = repoName ? `?repo=${encodeURIComponent(repoName)}` : '';
-  const response = await fetch(`${baseUrl}/reports/versions/${encodeURIComponent(type)}/${encodeURIComponent(title)}${params}`, { headers: authHeaders() });
+  const response = await authedFetch(`${baseUrl}/reports/versions/${encodeURIComponent(type)}/${encodeURIComponent(title)}${params}`);
   if (!response.ok) throw new Error(`Server returned ${response.status}`);
   return response.json();
 }

@@ -127,6 +127,7 @@ interface AppState {
   // Worker API (shared across app)
   runPipeline: (file: File, onProgress: (p: PipelineProgress) => void, clusteringConfig?: ProviderConfig) => Promise<PipelineResult>;
   runPipelineFromFiles: (files: FileEntry[], onProgress: (p: PipelineProgress) => void, clusteringConfig?: ProviderConfig) => Promise<PipelineResult>;
+  loadServerGraph: (nodes: GraphNode[], relationships: any[], fileContents: Record<string, string>) => Promise<void>;
   runQuery: (cypher: string) => Promise<any[]>;
   isDatabaseReady: () => Promise<boolean>;
 
@@ -505,6 +506,16 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     return deserializePipelineResult(serializedResult, createKnowledgeGraph);
   }, []);
 
+  const loadServerGraph = useCallback(async (
+    nodes: GraphNode[],
+    relationships: any[],
+    fileContents: Record<string, string>
+  ): Promise<void> => {
+    const api = apiRef.current;
+    if (!api) throw new Error('Worker not initialized');
+    await api.loadServerGraph(nodes, relationships, fileContents);
+  }, []);
+
   const runQuery = useCallback(async (cypher: string): Promise<any[]> => {
     const api = apiRef.current;
     if (!api) throw new Error('Worker not initialized');
@@ -623,7 +634,13 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     try {
       // Use override if provided (for fresh loads), fallback to state (for re-init)
       const effectiveProjectName = overrideProjectName || projectName || 'project';
-      const result = await api.initializeAgent(config, effectiveProjectName);
+      // Timeout after 60s to avoid hanging forever (e.g., KuzuDB WASM issues)
+      const result = await Promise.race([
+        api.initializeAgent(config, effectiveProjectName),
+        new Promise<{ success: false; error: string }>((_, reject) =>
+          setTimeout(() => reject(new Error('Agent initialization timed out after 60s')), 60_000)
+        ),
+      ]);
       if (result.success) {
         setIsAgentReady(true);
         setAgentError(null);
@@ -1101,6 +1118,18 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
 
       setViewMode('exploring');
 
+      // Load graph into browser-side KuzuDB so AI chat tools work (timeout 90s)
+      try {
+        await Promise.race([
+          loadServerGraph(result.nodes, result.relationships, result.fileContents),
+          new Promise<void>((_, reject) =>
+            setTimeout(() => reject(new Error('KuzuDB load timed out after 90s')), 90_000)
+          ),
+        ]);
+      } catch (err) {
+        console.warn('Failed to load graph into browser KuzuDB:', err);
+      }
+
       if (getActiveProviderConfig()) initializeAgent(pName);
 
       startEmbeddings().catch((err) => {
@@ -1119,7 +1148,7 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
       });
       setTimeout(() => { setViewMode('exploring'); setProgress(null); }, 3000);
     }
-  }, [serverBaseUrl, setProgress, setViewMode, setProjectName, setGraph, setFileContents, initializeAgent, startEmbeddings, setHighlightedNodeIds, clearAIToolHighlights, clearBlastRadius, setSelectedNode, setQueryResult, setCodeReferences, setCodePanelOpen, setCodeReferenceFocus]);
+  }, [serverBaseUrl, setProgress, setViewMode, setProjectName, setGraph, setFileContents, loadServerGraph, initializeAgent, startEmbeddings, setHighlightedNodeIds, clearAIToolHighlights, clearBlastRadius, setSelectedNode, setQueryResult, setCodeReferences, setCodePanelOpen, setCodeReferenceFocus]);
 
   // Save current repo to local cache (for ZIP/GitHub/folder repos)
   const saveLocalRepo = useCallback((name: string, repoGraph: KnowledgeGraph, repoFileContents: Map<string, string>) => {
@@ -1271,6 +1300,7 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     switchLocalRepo,
     runPipeline,
     runPipelineFromFiles,
+    loadServerGraph,
     runQuery,
     isDatabaseReady,
     // Embedding state and methods

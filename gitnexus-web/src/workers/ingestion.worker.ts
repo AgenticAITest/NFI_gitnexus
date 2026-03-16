@@ -2,6 +2,7 @@ import * as Comlink from 'comlink';
 import { runIngestionPipeline, runPipelineFromFiles } from '../core/ingestion/pipeline';
 import { PipelineProgress, SerializablePipelineResult, serializePipelineResult } from '../types/pipeline';
 import { FileEntry } from '../services/zip';
+import { createKnowledgeGraph, type GraphNode, type GraphRelationship } from '../core/graph/types';
 import {
   runEmbeddingPipeline,
   semanticSearch as doSemanticSearch,
@@ -205,6 +206,33 @@ const workerApi = {
     
     // Convert to serializable format for transfer back to main thread
     return serializePipelineResult(result);
+  },
+
+  /**
+   * Load a pre-built graph (from server) into the browser-side KuzuDB.
+   * This enables AI chat tools (Cypher, search) in server mode.
+   */
+  async loadServerGraph(
+    nodes: GraphNode[],
+    relationships: GraphRelationship[],
+    fileContents: Record<string, string>
+  ): Promise<void> {
+    const kuzu = await getKuzuAdapter();
+    const graph = createKnowledgeGraph();
+    for (const node of nodes) graph.addNode(node);
+    for (const rel of relationships) graph.addRelationship(rel);
+
+    const fileMap = new Map<string, string>();
+    for (const [p, c] of Object.entries(fileContents)) fileMap.set(p, c);
+
+    // Store file contents for grep/read tools
+    storedFileContents = fileMap;
+
+    // Load into KuzuDB
+    await kuzu.loadGraphToKuzu(graph, fileMap);
+
+    // Build BM25 search index
+    buildBM25Index(graph.nodes, fileMap);
   },
 
   /**

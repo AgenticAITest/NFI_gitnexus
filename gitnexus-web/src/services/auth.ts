@@ -1,5 +1,10 @@
 /** Auth service — manages tokens, auth API calls, and authenticated fetch */
 
+/** Dispatched when token refresh fails — signals the app to redirect to login */
+export function emitAuthExpired() {
+  window.dispatchEvent(new CustomEvent('auth-expired'));
+}
+
 export interface AuthUser {
   id: number;
   email: string;
@@ -168,6 +173,9 @@ export async function authFetch(serverUrl: string, input: string, init?: Request
       const { accessToken: newToken } = getStoredTokens();
       headers.set('Authorization', `Bearer ${newToken}`);
       res = await fetch(input, { ...init, headers });
+    } else {
+      // Refresh failed — session is dead, redirect to login
+      emitAuthExpired();
     }
   }
 

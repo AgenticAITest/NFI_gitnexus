@@ -1,4 +1,4 @@
-import { Search, Settings, HelpCircle, Sparkles, Github, Star, ChevronDown, Plus, RefreshCw, Trash2, Shield, LogOut, User } from 'lucide-react';
+import { Search, Settings, HelpCircle, Sparkles, ChevronDown, Plus, RefreshCw, Trash2, Shield, LogOut, User, Sun, Moon } from 'lucide-react';
 import { useAppState } from '../hooks/useAppState';
 import type { RepoSummary } from '../services/server-connection';
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
@@ -153,10 +153,8 @@ export const Header = ({ onFocusNode, availableRepos = [], onSwitchRepo, onReind
       <div className="flex items-center gap-4">
         {/* Logo */}
         <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 flex items-center justify-center bg-gradient-to-br from-accent to-node-interface rounded-md shadow-glow text-white text-sm font-bold">
-            ◇
-          </div>
-          <span className="font-semibold text-[15px] tracking-tight">GitNexus</span>
+          <img src="/CerebroNexus_darkbackground.png" alt="CerebroNexus" className="h-8 hidden dark:block" />
+          <img src="/CerebroNexus_lightbackground.png" alt="CerebroNexus" className="h-8 block dark:hidden" />
         </div>
 
         {/* Project badge / Repo selector dropdown */}
@@ -317,18 +315,21 @@ export const Header = ({ onFocusNode, availableRepos = [], onSwitchRepo, onReind
 
       {/* Right section */}
       <div className="flex items-center gap-2">
-        {/* GitHub Star Button */}
-        <a
-          href="https://github.com/abhigyanpatwari/GitNexus"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center gap-2 px-3.5 py-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 rounded-lg text-white text-sm font-medium shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all duration-200 group"
+        {/* Theme Toggle */}
+        <button
+          onClick={() => {
+            const html = document.documentElement;
+            const current = html.getAttribute('data-theme');
+            const next = current === 'light' ? 'dark' : 'light';
+            html.setAttribute('data-theme', next);
+            localStorage.setItem('gitnexus-theme', next);
+          }}
+          className="w-9 h-9 flex items-center justify-center rounded-md text-text-secondary hover:bg-hover hover:text-text-primary transition-colors"
+          title="Toggle theme"
         >
-          <Github className="w-4 h-4" />
-          <span className="hidden sm:inline">Star if cool</span>
-          <Star className="w-3.5 h-3.5 group-hover:fill-yellow-300 group-hover:text-yellow-300 transition-all" />
-          <span className="hidden sm:inline">✨</span>
-        </a>
+          <Sun className="w-[18px] h-[18px] hidden dark:block" />
+          <Moon className="w-[18px] h-[18px] block dark:hidden" />
+        </button>
 
         {/* Stats */}
         {graph && (
@@ -393,7 +394,7 @@ export const Header = ({ onFocusNode, availableRepos = [], onSwitchRepo, onReind
           `}
         >
           <Sparkles className="w-4 h-4" />
-          <span>Nexus AI</span>
+          <span>Chat with AI</span>
         </button>
       </div>
     </header>

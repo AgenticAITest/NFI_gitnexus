@@ -21,7 +21,7 @@ import { Shield, LogOut, User } from 'lucide-react';
 const AppContent = () => {
   const {
     viewMode, setViewMode, setGraph, setFileContents, setProgress, setProjectName,
-    progress, isRightPanelOpen, runPipeline, runPipelineFromFiles,
+    progress, isRightPanelOpen, runPipeline, runPipelineFromFiles, loadServerGraph,
     isSettingsPanelOpen, setSettingsPanelOpen, isAddRepoModalOpen, setAddRepoModalOpen,
     refreshLLMSettings, initializeAgent, startEmbeddings, codeReferences,
     selectedNode, isCodePanelOpen, serverBaseUrl, setServerBaseUrl,
@@ -111,9 +111,9 @@ const AppContent = () => {
     }
   }, [setViewMode, setGraph, setFileContents, setProgress, setProjectName, runPipelineFromFiles, startEmbeddingsWithFallback, initializeAgent, saveLocalRepo]);
 
-  const handleServerConnect = useCallback((result: ConnectToServerResult) => {
+  const handleServerConnect = useCallback(async (result: ConnectToServerResult) => {
     const repoPath = result.repoInfo.repoPath;
-    const projectName = repoPath.split('/').pop() || 'server-project';
+    const projectName = result.repoInfo.name || repoPath.split('/').pop() || 'server-project';
     setProjectName(projectName);
     const graph = createKnowledgeGraph();
     for (const node of result.nodes) graph.addNode(node);
@@ -123,12 +123,23 @@ const AppContent = () => {
     for (const [p, content] of Object.entries(result.fileContents)) fileMap.set(p, content);
     setFileContents(fileMap);
     setViewMode('exploring');
-    if (getActiveProviderConfig()) initializeAgent(projectName);
+    // Load graph into browser-side KuzuDB so AI chat tools work (timeout 90s)
+    try {
+      await Promise.race([
+        loadServerGraph(result.nodes, result.relationships, result.fileContents),
+        new Promise<void>((_, reject) =>
+          setTimeout(() => reject(new Error('KuzuDB load timed out after 90s')), 90_000)
+        ),
+      ]);
+    } catch (err) {
+      console.warn('Failed to load graph into browser KuzuDB:', err);
+    }
+    if (getActiveProviderConfig()) await initializeAgent(projectName);
     startEmbeddingsWithFallback();
-  }, [setViewMode, setGraph, setFileContents, setProjectName, initializeAgent, startEmbeddingsWithFallback]);
+  }, [setViewMode, setGraph, setFileContents, setProjectName, loadServerGraph, initializeAgent, startEmbeddingsWithFallback]);
 
   const onServerConnected = useCallback(async (result: ConnectToServerResult, serverUrl?: string) => {
-    handleServerConnect(result);
+    await handleServerConnect(result);
     if (serverUrl) {
       const baseUrl = normalizeServerUrl(serverUrl);
       setServerBaseUrl(baseUrl);

@@ -1,5 +1,8 @@
 @import "tailwindcss";
 
+/* Dark variant: match data-theme="dark" on <html> */
+@custom-variant dark (&:is([data-theme="dark"], [data-theme="dark"] *));
+
 /* ═══════════════════════════════════════════════════════════════
    TAILWIND V4 THEME CONFIGURATION
 ═══════════════════════════════════════════════════════════════ */
@@ -49,18 +52,47 @@
   --shadow-glow-soft: 0 0 40px rgba(124, 58, 237, 0.15);
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   LIGHT THEME OVERRIDES
+═══════════════════════════════════════════════════════════════ */
+[data-theme="light"] {
+  /* Backgrounds */
+  --color-void: #f5f5f7;
+  --color-deep: #eeeef0;
+  --color-surface: #ffffff;
+  --color-elevated: #f0f0f2;
+  --color-hover: #e8e8ec;
+
+  /* Borders */
+  --color-border-subtle: #d8d8e0;
+  --color-border-default: #c0c0cc;
+
+  /* Text */
+  --color-text-primary: #1a1a2e;
+  --color-text-secondary: #555570;
+  --color-text-muted: #888898;
+
+  /* Accent — keep same purple */
+  --color-accent: #7c3aed;
+  --color-accent-dim: #6d28d9;
+
+  /* Shadows — softer for light */
+  --shadow-glow: 0 0 20px rgba(124, 58, 237, 0.2);
+  --shadow-glow-soft: 0 0 40px rgba(124, 58, 237, 0.08);
+}
+
 /* Keyframes */
 @keyframes breathe {
 
   0%,
   100% {
-    border-color: #2a2a3a;
+    border-color: var(--color-border-default);
     box-shadow: 0 0 0 0 rgba(124, 58, 237, 0.3);
   }
 
   50% {
-    border-color: #7c3aed;
-    box-shadow: 0 0 40px 10px rgba(124, 58, 237, 0.3);
+    border-color: var(--color-accent);
+    box-shadow: 0 0 40px 10px rgba(124, 58, 237, 0.15);
   }
 }
 
@@ -138,7 +170,7 @@ body {
 ═══════════════════════════════════════════════════════════════ */
 .scrollbar-thin {
   scrollbar-width: thin;
-  scrollbar-color: #2a2a3a #0a0a10;
+  scrollbar-color: var(--color-border-default) var(--color-deep);
 }
 
 .scrollbar-thin::-webkit-scrollbar {
@@ -189,7 +221,7 @@ body {
 
 .chat-prose strong {
   font-weight: 600;
-  color: #fff;
+  color: var(--color-text-primary);
 }
 
 .chat-prose em {
@@ -203,7 +235,7 @@ body {
 .chat-prose h3,
 .chat-prose h4 {
   font-weight: 600;
-  color: #fff;
+  color: var(--color-text-primary);
   margin-top: 1.5em;
   margin-bottom: 0.5em;
   line-height: 1.3;
