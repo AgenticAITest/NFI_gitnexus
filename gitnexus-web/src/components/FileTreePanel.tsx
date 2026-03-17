@@ -24,6 +24,10 @@ import {
   Wrench,
   BookOpen,
   Code2,
+  Network,
+  LayoutDashboard,
+  FileSearch,
+  Route,
 } from 'lucide-react';
 import { useAppState } from '../hooks/useAppState';
 import { FILTERABLE_LABELS, NODE_COLORS, ALL_EDGE_TYPES, EDGE_INFO, type EdgeType } from '../lib/constants';
@@ -207,24 +211,73 @@ interface FileTreePanelProps {
 
 /** Generate a standalone HTML page from a Markdown report */
 function reportToHTML(title: string, type: string, content: string, createdAt: number): string {
-  let body = content
+  // Extract mermaid blocks before HTML-escaping, replace with placeholders
+  const mermaidBlocks: string[] = [];
+  let processed = content.replace(/```mermaid\n([\s\S]*?)```/g, (_match, code) => {
+    mermaidBlocks.push(code.trim());
+    return `%%MERMAID_${mermaidBlocks.length - 1}%%`;
+  });
+
+  // Now convert other code blocks before escaping (preserve them as placeholders too)
+  const codeBlocks: { lang: string; code: string }[] = [];
+  processed = processed.replace(/```(\w*)\n([\s\S]*?)```/g, (_match, lang, code) => {
+    codeBlocks.push({ lang, code });
+    return `%%CODE_${codeBlocks.length - 1}%%`;
+  });
+
+  // Convert markdown tables to HTML before escaping
+  processed = processed.replace(
+    /^(\|.+\|)\n(\|[\s:|-]+\|)\n((?:\|.+\|\n?)+)/gm,
+    (_match, header: string, _sep: string, rows: string) => {
+      const thCells = header.split('|').filter((c: string) => c.trim()).map((c: string) => `<th>${c.trim()}</th>`).join('');
+      const bodyRows = rows.trim().split('\n').map((row: string) => {
+        const cells = row.split('|').filter((c: string) => c.trim()).map((c: string) => `<td>${c.trim()}</td>`).join('');
+        return `<tr>${cells}</tr>`;
+      }).join('\n');
+      return `<table><thead><tr>${thCells}</tr></thead><tbody>${bodyRows}</tbody></table>`;
+    }
+  );
+
+  // HTML-escape remaining content
+  let body = processed
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/^#### (.+)$/gm, '<h4>$1</h4>')
     .replace(/^### (.+)$/gm, '<h3>$1</h3>')
     .replace(/^## (.+)$/gm, '<h2>$1</h2>')
     .replace(/^# (.+)$/gm, '<h1>$1</h1>')
-    .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code class="language-$1">$2</code></pre>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
     .replace(/^- (.+)$/gm, '<li>$1</li>')
     .replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>')
-    .replace(/^(?!<[huplo])(.*\S.*)$/gm, '<p>$1</p>')
+    .replace(/^(?!<[huplo]|%%)(.*\S.*)$/gm, '<p>$1</p>')
     .replace(/\n{2,}/g, '\n');
+
+  // Restore code blocks (HTML-escaped)
+  codeBlocks.forEach(({ lang, code }, i) => {
+    const escaped = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    body = body.replace(
+      new RegExp(`<p>%%CODE_${i}%%</p>|%%CODE_${i}%%`),
+      `<pre><code class="language-${lang}">${escaped}</code></pre>`
+    );
+  });
+
+  // Restore mermaid blocks as <pre class="mermaid"> for mermaid CDN rendering
+  mermaidBlocks.forEach((code, i) => {
+    body = body.replace(
+      new RegExp(`<p>%%MERMAID_${i}%%</p>|%%MERMAID_${i}%%`),
+      `<pre class="mermaid">${code}</pre>`
+    );
+  });
+
+  // Unescape table HTML that got caught by the escaper
+  body = body.replace(/&lt;(\/?(table|thead|tbody|tr|th|td))&gt;/g, '<$1>');
+
+  const hasMermaid = mermaidBlocks.length > 0;
 
   return `<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${title} - GitNexus Report</title>
+<title>${title} - GitNexus Report</title>${hasMermaid ? '\n<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"><\/script>' : ''}
 <style>
 :root{--bg:#0f172a;--surface:#1e293b;--border:#334155;--text:#e2e8f0;--muted:#94a3b8;--accent:#22d3ee}
 *{margin:0;padding:0;box-sizing:border-box}
@@ -234,11 +287,14 @@ h3{font-size:1.1rem;margin:1.2rem 0 .4rem;color:#cbd5e1}h4{font-size:1rem;margin
 p{margin:.5rem 0}ul{margin:.5rem 0 .5rem 1.5rem}li{margin:.2rem 0}
 code{background:var(--surface);padding:.15rem .4rem;border-radius:4px;font-size:.9em;color:var(--accent)}
 pre{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:1rem;overflow-x:auto;margin:.8rem 0}pre code{background:none;padding:0;color:var(--text)}
+pre.mermaid{background:transparent;border:1px solid var(--border);border-radius:12px;padding:1.5rem;text-align:center}
+table{width:100%;border-collapse:collapse;margin:.8rem 0;font-size:.9em}th,td{border:1px solid var(--border);padding:.5rem .75rem;text-align:left}th{background:var(--surface);color:var(--accent);font-weight:600}tr:nth-child(even){background:var(--surface)}
 strong{color:#f8fafc}.meta{color:var(--muted);font-size:.85rem;margin-bottom:2rem;padding-bottom:1rem;border-bottom:1px solid var(--border)}
-@media print{body{background:#fff;color:#1e293b}h1{color:#0891b2}code{color:#0891b2}pre{border-color:#e2e8f0}.meta{color:#64748b}}
+@media print{body{background:#fff;color:#1e293b}h1{color:#0891b2}code{color:#0891b2}pre{border-color:#e2e8f0}.meta{color:#64748b}th{background:#f1f5f9}tr:nth-child(even){background:#f8fafc}}
 </style></head><body>
 <div class="meta"><strong>${title}</strong> &middot; ${type} report<br>Generated: ${new Date(createdAt).toLocaleString()}<br><em>Exported from GitNexus</em></div>
-${body}
+${body}${hasMermaid ? `
+<script>mermaid.initialize({startOnLoad:true,theme:'base',themeVariables:{primaryColor:'#1e293b',primaryTextColor:'#f1f5f9',primaryBorderColor:'#22d3ee',lineColor:'#94a3b8',mainBkg:'#1e293b',nodeBorder:'#22d3ee',clusterBkg:'#1e293b',clusterBorder:'#475569',titleColor:'#f1f5f9',edgeLabelBackground:'#0f172a'},fontFamily:'"Segoe UI",sans-serif',fontSize:13});<\/script>` : ''}
 </body></html>`;
 }
 
@@ -588,6 +644,10 @@ export const FileTreePanel = ({ onFocusNode }: FileTreePanelProps) => {
           ) : (
             <div className="flex flex-col gap-4">
               {([
+                { type: 'architecture' as ReportType, label: 'Architecture Overview', Icon: Network },
+                { type: 'overview' as ReportType, label: 'Project Overview', Icon: LayoutDashboard },
+                { type: 'key-files' as ReportType, label: 'Key Files Analysis', Icon: FileSearch },
+                { type: 'api-handlers' as ReportType, label: 'API Handlers', Icon: Route },
                 { type: 'health' as ReportType, label: 'Health Assessment', Icon: HeartPulse },
                 { type: 'impact' as ReportType, label: 'Impact Analysis', Icon: Zap },
                 { type: 'test-scenarios' as ReportType, label: 'Test Scenarios', Icon: TestTube2 },

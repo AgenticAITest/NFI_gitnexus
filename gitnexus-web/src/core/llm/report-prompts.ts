@@ -308,6 +308,104 @@ Format as a professional technical document with:
 - [[file.ts]] and [[Function:Name]] / [[Class:Name]] citations for every reference
 - Developer-friendly language with precise technical terminology`,
   },
+  // Quick insight reports (no input required)
+  {
+    type: 'architecture',
+    label: 'Architecture Overview',
+    title: 'Project Architecture',
+    requiresInput: false,
+    prompt: `You are a senior software architect producing a comprehensive architecture report for this codebase.
+
+Use ALL available tools (overview, cypher, search, explore, read) to deeply understand the system before writing.
+
+Your report MUST include:
+1. **High-Level Architecture** — overall system design, major layers/tiers, and how they interact
+2. **Architecture Diagram** — a mermaid flowchart or C4-style diagram showing the main components and their relationships
+3. **Design Patterns** — patterns used (MVC, event-driven, pub/sub, repository, etc.) with concrete examples from the code
+4. **Module Dependency Map** — a mermaid graph showing how major modules depend on each other
+5. **Data Flow** — how data moves through the system from input to output, with a mermaid sequence or flowchart diagram
+6. **Key Architectural Decisions** — notable design choices, trade-offs, and their implications
+7. **Entry Points & Boundaries** — where the system starts, external interfaces, API boundaries
+
+Format as a professional architecture document with:
+- Clear markdown headings and numbered sections
+- Mermaid diagrams (flowchart, graph, sequence) throughout — at least 2-3 diagrams
+- [[file.ts]] and [[Function:Name]] / [[Class:Name]] citations for every reference
+- Tables for structured data where appropriate`,
+  },
+  {
+    type: 'overview',
+    label: 'Project Overview',
+    title: 'Project Overview',
+    requiresInput: false,
+    prompt: `You are a technical writer producing a comprehensive project overview report for this codebase.
+
+Use ALL available tools (overview, cypher, search, explore, read) to deeply understand what this project does before writing.
+
+Your report MUST include:
+1. **What This Project Does** — purpose, problem it solves, target users
+2. **Core Features** — enumerate all major features/capabilities with brief descriptions
+3. **Technology Stack** — languages, frameworks, libraries, databases, and infrastructure
+4. **Project Structure** — a mermaid diagram showing the folder/module organization
+5. **How It Works** — end-to-end walkthrough of the primary user workflow, with a mermaid sequence diagram
+6. **Configuration & Setup** — how the project is configured, key environment variables, build process
+7. **Key Concepts** — domain-specific terms and concepts a new developer needs to understand
+
+Format as a professional technical document with:
+- Clear markdown headings and numbered sections
+- Mermaid diagrams (flowchart, sequence) — at least 2 diagrams
+- [[file.ts]] and [[Function:Name]] / [[Class:Name]] citations for every reference
+- Tables for structured data where appropriate`,
+  },
+  {
+    type: 'key-files',
+    label: 'Key Files Analysis',
+    title: 'Key Files Analysis',
+    requiresInput: false,
+    prompt: `You are a senior developer producing a report on the most important files in this codebase.
+
+Use ALL available tools (overview, cypher, search, impact, explore) to identify the highest-impact files before writing.
+
+Your report MUST include:
+1. **Critical Files Summary** — table of the top 15-20 most important files ranked by connectivity/impact, with file path, purpose, and why it matters
+2. **Dependency Graph** — a mermaid graph showing how the critical files relate to each other
+3. **Entry Points** — files that serve as system entry points (main, index, CLI, routes, workers)
+4. **Configuration Files** — key config files and what they control
+5. **Shared Utilities & Core Libraries** — files that are imported by many others (high fan-out)
+6. **Risk Hotspots** — files with the highest number of dependents (high fan-in) that are dangerous to modify
+7. **Module Ownership Map** — a mermaid diagram showing which files belong to which functional area/cluster
+
+Format as a professional technical document with:
+- Clear markdown headings and numbered sections
+- Mermaid diagrams — at least 2 diagrams
+- [[file.ts]] citations for every file reference
+- Tables for structured data (file lists, metrics)`,
+  },
+  {
+    type: 'api-handlers',
+    label: 'API Handlers Report',
+    title: 'API Handlers & Endpoints',
+    requiresInput: false,
+    prompt: `You are a senior backend developer producing a comprehensive API handlers report for this codebase.
+
+Use ALL available tools (overview, cypher, search, explore, read) to find every API handler, route, and endpoint before writing.
+
+Your report MUST include:
+1. **API Overview** — summary of the API surface area (REST, GraphQL, RPC, WebSocket, etc.)
+2. **Endpoint Catalog** — table of ALL endpoints with: method, path/route, handler function, description, auth required
+3. **Request Flow Diagram** — a mermaid sequence diagram showing the typical request lifecycle (middleware → handler → service → response)
+4. **Route Organization** — a mermaid graph showing how routes are organized (by module, feature, resource)
+5. **Middleware & Interceptors** — what middleware runs on requests (auth, validation, logging, error handling)
+6. **Handler Patterns** — common patterns used across handlers, shared utilities, response formatting
+7. **Authentication & Authorization** — how endpoints are protected, role-based access, token validation
+8. **Error Handling** — how errors are caught and returned to clients
+
+Format as a professional API documentation with:
+- Clear markdown headings and numbered sections
+- Mermaid diagrams (sequence, flowchart) — at least 2 diagrams
+- [[file.ts]] and [[Function:Name]] citations for every reference
+- Tables for the endpoint catalog and structured data`,
+  },
 ];
 
 /** Load custom prompt overrides from localStorage */

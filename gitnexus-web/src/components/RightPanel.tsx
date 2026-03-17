@@ -3,7 +3,8 @@ import {
   Send, Square, Sparkles, User,
   PanelRightClose, Loader2, AlertTriangle, GitBranch,
   HeartPulse, Zap, TestTube2, Save, ArrowLeft, Trash2, Check,
-  Paperclip, X, Wrench, BookOpen, Code2, Search, Bot, CircleAlert
+  Paperclip, X, Wrench, BookOpen, Code2, Search, Bot, CircleAlert,
+  Network, LayoutDashboard, FileSearch, Route
 } from 'lucide-react';
 import type { AgentInitStep } from '../hooks/useAppState';
 import { useAppState } from '../hooks/useAppState';
@@ -346,16 +347,18 @@ export const RightPanel = () => {
       case 'refactoring': return Wrench;
       case 'fsd': return BookOpen;
       case 'tsd': return Code2;
+      case 'architecture': return Network;
+      case 'overview': return LayoutDashboard;
+      case 'key-files': return FileSearch;
+      case 'api-handlers': return Route;
       default: return Sparkles;
     }
   };
 
-  const chatSuggestions = [
-    'Explain the project architecture',
-    'What does this project do?',
-    'Show me the most important files',
-    'Find all API handlers',
-  ];
+  // Split report prompts into quick insights vs deep reports
+  const quickInsightTypes = new Set(['architecture', 'overview', 'key-files', 'api-handlers']);
+  const quickInsights = reportPrompts.filter(rp => quickInsightTypes.has(rp.type));
+  const deepReports = reportPrompts.filter(rp => !quickInsightTypes.has(rp.type));
 
   if (!isRightPanelOpen) return null;
 
@@ -473,22 +476,33 @@ export const RightPanel = () => {
                 <p className="text-sm text-text-secondary leading-relaxed mb-5">
                   I can help you understand the architecture, find functions, or explain connections.
                 </p>
-                <div className="flex flex-wrap gap-2 justify-center">
-                  {chatSuggestions.map((suggestion) => (
-                    <button
-                      key={suggestion}
-                      onClick={() => setChatInput(suggestion)}
-                      className="px-3 py-1.5 bg-elevated border border-border-subtle rounded-full text-xs text-text-secondary hover:border-accent hover:text-text-primary transition-colors"
-                    >
-                      {suggestion}
-                    </button>
-                  ))}
+                {/* Quick Insights */}
+                <div className="w-full">
+                  <p className="text-xs text-text-muted mb-3">Quick Insights</p>
+                  <div className="grid grid-cols-2 gap-2 w-full">
+                    {quickInsights.map((rp) => {
+                      const Icon = getReportIcon(rp.type);
+                      return (
+                        <button
+                          key={rp.type}
+                          onClick={() => handleReportPrompt(rp)}
+                          disabled={!isProviderConfigured()}
+                          className="flex items-center gap-2.5 px-3 py-3 bg-elevated border border-border-subtle rounded-xl text-left hover:border-accent hover:bg-surface transition-colors disabled:opacity-50 disabled:cursor-not-allowed group"
+                        >
+                          <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-accent/10 text-accent group-hover:bg-accent/20 transition-colors shrink-0">
+                            <Icon className="w-4 h-4" />
+                          </div>
+                          <span className="text-xs text-text-secondary group-hover:text-text-primary transition-colors leading-tight">{rp.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
-                {/* Report Generation */}
+                {/* Deep Reports */}
                 <div className="mt-4 pt-4 border-t border-border-subtle w-full">
-                  <p className="text-xs text-text-muted mb-3">Generate Reports</p>
+                  <p className="text-xs text-text-muted mb-3">Deep Reports</p>
                   <div className="grid grid-cols-3 gap-2 w-full">
-                    {reportPrompts.map((rp) => {
+                    {deepReports.map((rp) => {
                       const Icon = getReportIcon(rp.type);
                       return (
                         <button

@@ -58,12 +58,14 @@ export const MermaidDiagram = ({ code }: MermaidDiagramProps) => {
   const [svg, setSvg] = useState<string>('');
 
   useEffect(() => {
+    let renderId: string | null = null;
+
     const renderDiagram = async () => {
       if (!containerRef.current) return;
 
       try {
         // Generate unique ID for this diagram
-        const id = `mermaid-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        renderId = `mermaid-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
         // Sanitize subgraph labels: fix "subgraph Name (Label)" → "subgraph Name["Label"]"
         const sanitized = code.trim().replace(
@@ -72,16 +74,22 @@ export const MermaidDiagram = ({ code }: MermaidDiagramProps) => {
         );
 
         // Render the diagram
-        const { svg: renderedSvg } = await mermaid.render(id, sanitized);
+        const { svg: renderedSvg } = await mermaid.render(renderId, sanitized);
         setSvg(renderedSvg);
         setError(null);
       } catch (err) {
-        // Silent catch for streaming: 
+        // Silent catch for streaming:
         // If render fails (common during partial streaming), we:
         // 1. Log to console for debugging
         // 2. Do NOT set error state (avoids flashing red box)
         // 3. Do NOT clear existing SVG (keeps last valid state visible)
         console.debug('Mermaid render skipped (incomplete):', err);
+      } finally {
+        // Clean up orphaned temp elements that mermaid.render() leaves in document.body
+        if (renderId) {
+          document.getElementById(renderId)?.remove();
+          document.getElementById('d' + renderId)?.remove();
+        }
       }
     };
 
@@ -90,7 +98,14 @@ export const MermaidDiagram = ({ code }: MermaidDiagramProps) => {
       renderDiagram();
     }, 300);
 
-    return () => clearTimeout(timeoutId);
+    return () => {
+      clearTimeout(timeoutId);
+      // Also clean up on unmount
+      if (renderId) {
+        document.getElementById(renderId)?.remove();
+        document.getElementById('d' + renderId)?.remove();
+      }
+    };
   }, [code]);
 
   // Create a pseudo ProcessData for the modal (with custom rawMermaid property)

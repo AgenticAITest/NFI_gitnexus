@@ -133,13 +133,15 @@ export const ProcessFlowModal = ({ process, onClose, onFocusInGraph, isFullScree
     useEffect(() => {
         if (!process || !diagramRef.current) return;
 
+        let renderId: string | null = null;
+
         const renderDiagram = async () => {
             try {
                 // Check if we have raw mermaid code (from AI chat) or need to generate it
                 const mermaidCode = (process as any).rawMermaid
                     ? (process as any).rawMermaid
                     : generateProcessMermaid(process);
-                const id = `mermaid-${Date.now()}`;
+                renderId = `mermaid-${Date.now()}`;
 
                 // Clear previous content
                 diagramRef.current!.innerHTML = '';
@@ -149,7 +151,7 @@ export const ProcessFlowModal = ({ process, onClose, onFocusInGraph, isFullScree
                     /^(\s*subgraph\s+\S+)\s*\(([^)]+)\)/gm,
                     '$1["$2"]'
                 );
-                const { svg } = await mermaid.render(id, sanitizedCode);
+                const { svg } = await mermaid.render(renderId, sanitizedCode);
                 diagramRef.current!.innerHTML = svg;
             } catch (error) {
                 console.error('Mermaid render error:', error);
@@ -169,10 +171,24 @@ export const ProcessFlowModal = ({ process, onClose, onFocusInGraph, isFullScree
             </div>
           </div>
         `;
+            } finally {
+                // Clean up orphaned temp elements that mermaid.render() leaves in document.body
+                if (renderId) {
+                    document.getElementById(renderId)?.remove();
+                    document.getElementById('d' + renderId)?.remove();
+                }
             }
         };
 
         renderDiagram();
+
+        return () => {
+            // Clean up on unmount
+            if (renderId) {
+                document.getElementById(renderId)?.remove();
+                document.getElementById('d' + renderId)?.remove();
+            }
+        };
     }, [process]);
 
     // Close on escape

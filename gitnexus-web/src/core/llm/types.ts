@@ -179,7 +179,7 @@ export interface ChatMessage {
   reportMeta?: { type: ReportType; title: string };
 }
 
-export type ReportType = 'health' | 'impact' | 'test-scenarios' | 'refactoring' | 'fsd' | 'tsd';
+export type ReportType = 'health' | 'impact' | 'test-scenarios' | 'refactoring' | 'fsd' | 'tsd' | 'architecture' | 'overview' | 'key-files' | 'api-handlers';
 
 export interface SavedReport {
   id: string;

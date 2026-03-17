@@ -1122,19 +1122,34 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   const saveReport = useCallback((messageId: string, type: ReportType, title: string) => {
-    const message = chatMessages.find(m => m.id === messageId);
-    if (!message) return;
+    // Use functional setState to read the latest chatMessages (avoids stale closure)
+    setChatMessages(prev => {
+      const message = prev.find(m => m.id === messageId);
+      if (!message) return prev;
 
-    const report: SavedReport = {
-      id: crypto.randomUUID(),
-      type,
-      title,
-      content: message.content,
-      messageId,
-      createdAt: Date.now(),
-    };
-    setSavedReports(prev => [...prev, report]);
-  }, [chatMessages]);
+      // message.content is already built by flushUpdate() joining reasoning + content steps.
+      // If that's empty, fall back to extracting from steps directly.
+      const content = message.content
+        || (message.steps || [])
+            .filter(s => (s.type === 'content' || s.type === 'reasoning') && s.content)
+            .map(s => s.content)
+            .join('\n\n');
+
+      if (!content) return prev;
+
+      const report: SavedReport = {
+        id: crypto.randomUUID(),
+        type,
+        title,
+        content,
+        messageId,
+        createdAt: Date.now(),
+      };
+      setSavedReports(r => [...r, report]);
+
+      return prev; // Don't modify chatMessages
+    });
+  }, []);
 
   const deleteReport = useCallback((reportId: string) => {
     setSavedReports(prev => prev.filter(r => r.id !== reportId));
