@@ -19,6 +19,14 @@ export type ViewMode = 'onboarding' | 'loading' | 'exploring';
 export type RightPanelTab = 'code' | 'chat';
 export type EmbeddingStatus = 'idle' | 'loading' | 'embedding' | 'indexing' | 'ready' | 'error';
 
+/** Tracks which step the agent initialization pipeline is on. null = idle. */
+export type AgentInitStep =
+  | { step: 'search'; status: 'active' }
+  | { step: 'search'; status: 'done' }
+  | { step: 'agent'; status: 'active' }
+  | { step: 'agent'; status: 'done' }
+  | null;
+
 export interface QueryResult {
   rows: Record<string, any>[];
   nodeIds: string[];
@@ -156,6 +164,8 @@ interface AppState {
   setAddRepoModalOpen: (open: boolean) => void;
   isAgentReady: boolean;
   isAgentInitializing: boolean;
+  agentInitStep: AgentInitStep;
+  setAgentInitStep: (v: AgentInitStep) => void;
   agentError: string | null;
 
   // Chat state
@@ -313,6 +323,7 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
   const [isAddRepoModalOpen, setAddRepoModalOpen] = useState(false);
   const [isAgentReady, setIsAgentReady] = useState(false);
   const [isAgentInitializing, setIsAgentInitializing] = useState(false);
+  const [agentInitStep, setAgentInitStep] = useState<AgentInitStep>(null);
   const [agentError, setAgentError] = useState<string | null>(null);
 
   // Chat state
@@ -466,13 +477,31 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
   const apiRef = useRef<Comlink.Remote<IngestionWorkerApi> | null>(null);
 
   useEffect(() => {
+    console.log(`[MAIN] Creating worker...`);
     const worker = new Worker(
       new URL('../workers/ingestion.worker.ts', import.meta.url),
       { type: 'module' }
     );
+
+    // Catch worker-level errors (module load failures, syntax errors, etc.)
+    worker.onerror = (e) => {
+      console.error(`[MAIN] Worker onerror:`, e.message, e.filename, e.lineno, e);
+    };
+    worker.addEventListener('messageerror', (e) => {
+      console.error(`[MAIN] Worker messageerror:`, e);
+    });
+
+    console.log(`[MAIN] Worker created, wrapping with Comlink...`);
     const api = Comlink.wrap<IngestionWorkerApi>(worker);
     workerRef.current = worker;
     apiRef.current = api;
+
+    // Quick health check — if this hangs, the worker module never finished loading
+    (api as any).ping().then((r: string) => {
+      console.log(`[MAIN] Worker ping response: ${r}`);
+    }).catch((e: any) => {
+      console.error(`[MAIN] Worker ping FAILED:`, e);
+    });
 
     return () => {
       worker.terminate();
@@ -638,27 +667,42 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
       let result: { success: boolean; error?: string };
 
       if (serverBaseUrl) {
-        // Server mode — use HTTP-backed agent (no browser-side KuzuDB needed)
+        // Server mode — always use HTTP-backed agent (no browser-side KuzuDB).
+        setAgentInitStep({ step: 'search', status: 'done' });
+        setAgentInitStep({ step: 'agent', status: 'active' });
+
+        if (import.meta.env.DEV) {
+          console.log('[initializeAgent] Server mode — using HTTP-backed agent');
+        }
         const fileEntries: [string, string][] = [];
         fileContents.forEach((content, path) => fileEntries.push([path, content]));
+        console.log(`[initializeAgent] Server mode — ${fileEntries.length} files, serverBaseUrl=${serverBaseUrl}`);
         const { accessToken } = getStoredTokens();
-        result = await Promise.race([
-          api.initializeBackendAgent(config, serverBaseUrl, effectiveProjectName, fileEntries, effectiveProjectName, accessToken ?? undefined),
-          new Promise<{ success: false; error: string }>((_, reject) =>
-            setTimeout(() => reject(new Error('Agent initialization timed out after 60s')), 60_000)
-          ),
-        ]);
+        console.log(`[initializeAgent] Auth token present: ${!!accessToken}`);
+
+        // Estimate payload size BEFORE calling worker
+        const payloadSize = fileEntries.reduce((acc, [p, c]) => acc + p.length + c.length, 0);
+        console.log(`[initializeAgent] Payload: ${fileEntries.length} files, ~${(payloadSize / 1024).toFixed(0)} KB`);
+
+        // Check worker is responsive before the heavy call
+        console.log(`[initializeAgent] Pinging worker...`);
+        console.time('[initializeAgent] ping');
+        const pong = await (api as any).ping();
+        console.timeEnd('[initializeAgent] ping');
+        console.log(`[initializeAgent] Worker responded: ${pong}`);
+
+        console.log(`[initializeAgent] Calling worker.initializeBackendAgent...`);
+        console.time('[initializeAgent] worker round-trip');
+        result = await api.initializeBackendAgent(config, serverBaseUrl, effectiveProjectName, fileEntries, effectiveProjectName, accessToken ?? undefined);
+        console.timeEnd('[initializeAgent] worker round-trip');
       } else {
-        // Local mode — use browser-side KuzuDB WASM
-        result = await Promise.race([
-          api.initializeAgent(config, effectiveProjectName),
-          new Promise<{ success: false; error: string }>((_, reject) =>
-            setTimeout(() => reject(new Error('Agent initialization timed out after 60s')), 60_000)
-          ),
-        ]);
+        // Local mode — KuzuDB already loaded during ingestion
+        setAgentInitStep({ step: 'agent', status: 'active' });
+        result = await api.initializeAgent(config, effectiveProjectName);
       }
 
       if (result.success) {
+        setAgentInitStep({ step: 'agent', status: 'done' });
         setIsAgentReady(true);
         setAgentError(null);
         if (import.meta.env.DEV) {
@@ -674,6 +718,8 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
       setIsAgentReady(false);
     } finally {
       setIsAgentInitializing(false);
+      // Clear step indicator after a brief moment so user sees the final "done" state
+      setTimeout(() => setAgentInitStep(null), 1500);
     }
   }, [projectName, serverBaseUrl, fileContents]);
 
@@ -741,9 +787,14 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     const toolCallsForMessage: ToolCallInfo[] = [];
     let stepCounter = 0;
 
-    // Helper to update the message with current steps
-    const updateMessage = () => {
-      // Build content from steps for backwards compatibility
+    // Helper to update the message with current steps.
+    // Throttled: during streaming, caps React reconciliation to ~4/sec to avoid
+    // expensive re-renders on large markdown content.
+    let updatePending = false;
+    let updateTimer: ReturnType<typeof setTimeout> | null = null;
+    const flushUpdate = () => {
+      updatePending = false;
+      updateTimer = null;
       const contentParts = stepsForMessage
         .filter(s => s.type === 'reasoning' || s.type === 'content')
         .map(s => s.content)
@@ -768,9 +819,21 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
         }
       });
     };
+    const updateMessage = (immediate = false) => {
+      if (immediate) {
+        if (updateTimer) clearTimeout(updateTimer);
+        flushUpdate();
+        return;
+      }
+      updatePending = true;
+      if (!updateTimer) {
+        updateTimer = setTimeout(flushUpdate, 250); // max 4 updates/sec
+      }
+    };
 
     try {
       const onChunk = Comlink.proxy((chunk: AgentStreamChunk) => {
+        try {
         switch (chunk.type) {
           case 'reasoning':
             // LLM's thinking/reasoning - accumulate contiguous reasoning
@@ -1019,9 +1082,14 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
             break;
 
           case 'done':
-            // Finalize the assistant message - just call updateMessage one more time
-            updateMessage();
+            // Finalize the assistant message — flush immediately (no throttle)
+            updateMessage(true);
             break;
+        }
+        } catch (err) {
+          // Catch errors inside the Comlink callback to prevent silent crashes
+          // that would terminate the stream and potentially crash React.
+          console.error('[onChunk] Error processing chunk:', err);
         }
       });
 
@@ -1030,6 +1098,9 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
       const message = error instanceof Error ? error.message : String(error);
       setAgentError(message);
     } finally {
+      // Flush any pending throttled update
+      if (updateTimer) clearTimeout(updateTimer);
+      if (updatePending) flushUpdate();
       setIsChatLoading(false);
       setCurrentToolCalls([]);
     }
@@ -1135,30 +1206,22 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
 
       setViewMode('exploring');
 
-      // In server mode, the backend agent uses HTTP queries — no need to load into browser KuzuDB.
-      // Skip the slow/hanging KuzuDB WASM load entirely.
-      if (!serverBaseUrl) {
-        try {
-          await Promise.race([
-            loadServerGraph(result.nodes, result.relationships, result.fileContents),
-            new Promise<void>((_, reject) =>
-              setTimeout(() => reject(new Error('KuzuDB load timed out after 90s')), 90_000)
-            ),
-          ]);
-        } catch (err) {
-          console.warn('Failed to load graph into browser KuzuDB:', err);
-        }
-      }
+      // Dispose stale agent from previous repo so lazy init creates a fresh one
+      console.log(`[switchRepo] Disposing stale agent...`);
+      apiRef.current?.disposeAgent();
+      setIsAgentReady(false);
+      setAgentError(null);
 
-      if (getActiveProviderConfig()) initializeAgent(pName);
-
+      console.log(`[switchRepo] Starting embeddings (fire-and-forget)...`);
       startEmbeddings().catch((err) => {
+        console.log(`[switchRepo] Embeddings failed (first try):`, err?.message);
         if (err?.name === 'WebGPUNotAvailableError' || err?.message?.includes('WebGPU')) {
-          startEmbeddings('wasm').catch(console.warn);
+          startEmbeddings('wasm').catch((e) => console.warn('[switchRepo] Embeddings wasm fallback failed:', e?.message));
         } else {
-          console.warn('Embeddings auto-start failed:', err);
+          console.warn('[switchRepo] Embeddings auto-start failed:', err);
         }
       });
+      // No browser-side KuzuDB WASM load — HTTP agent handles server mode.
     } catch (err) {
       console.error('Repo switch failed:', err);
       setProgress({
@@ -1168,7 +1231,7 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
       });
       setTimeout(() => { setViewMode('exploring'); setProgress(null); }, 3000);
     }
-  }, [serverBaseUrl, setProgress, setViewMode, setProjectName, setGraph, setFileContents, loadServerGraph, initializeAgent, startEmbeddings, setHighlightedNodeIds, clearAIToolHighlights, clearBlastRadius, setSelectedNode, setQueryResult, setCodeReferences, setCodePanelOpen, setCodeReferenceFocus]);
+  }, [serverBaseUrl, setProgress, setViewMode, setProjectName, setGraph, setFileContents, initializeAgent, startEmbeddings, setHighlightedNodeIds, clearAIToolHighlights, clearBlastRadius, setSelectedNode, setQueryResult, setCodeReferences, setCodePanelOpen, setCodeReferenceFocus]);
 
   // Save current repo to local cache (for ZIP/GitHub/folder repos)
   const saveLocalRepo = useCallback((name: string, repoGraph: KnowledgeGraph, repoFileContents: Map<string, string>) => {
@@ -1341,6 +1404,8 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     setAddRepoModalOpen,
     isAgentReady,
     isAgentInitializing,
+    agentInitStep,
+    setAgentInitStep,
     agentError,
     // Chat state
     chatMessages,

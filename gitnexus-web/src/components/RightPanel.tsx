@@ -3,14 +3,72 @@ import {
   Send, Square, Sparkles, User,
   PanelRightClose, Loader2, AlertTriangle, GitBranch,
   HeartPulse, Zap, TestTube2, Save, ArrowLeft, Trash2, Check,
-  Paperclip, X, Wrench, BookOpen, Code2
+  Paperclip, X, Wrench, BookOpen, Code2, Search, Bot, CircleAlert
 } from 'lucide-react';
+import type { AgentInitStep } from '../hooks/useAppState';
 import { useAppState } from '../hooks/useAppState';
 import { ToolCallCard } from './ToolCallCard';
 import { isProviderConfigured } from '../core/llm/settings-service';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ProcessesPanel } from './ProcessesPanel';
 import { getEffectivePrompts, type ReportPrompt } from '../core/llm/report-prompts';
+
+const INIT_STEPS = [
+  { key: 'search', label: 'Search index', icon: Search },
+  { key: 'agent', label: 'AI Agent', icon: Bot },
+] as const;
+
+/** Stepped progress indicator shown during agent initialization */
+const AgentInitProgress = ({ step }: { step: NonNullable<AgentInitStep> }) => {
+  // Determine the ordinal position of the current step
+  const currentIdx = INIT_STEPS.findIndex(s => s.key === step.step);
+
+  return (
+    <div className="px-4 py-3 border-b border-border-subtle bg-surface/50">
+      <div className="flex items-center gap-1">
+        {INIT_STEPS.map((s, i) => {
+          const Icon = s.icon;
+          const isCurrent = s.key === step.step;
+          const isPast = i < currentIdx;
+          const isFuture = i > currentIdx;
+
+          let statusIcon: React.ReactNode;
+          let textColor: string;
+
+          if (isPast || (isCurrent && step.status === 'done')) {
+            statusIcon = <Check className="w-3 h-3 text-emerald-400" />;
+            textColor = 'text-emerald-400';
+          } else if (isCurrent && step.status === 'warn') {
+            statusIcon = <CircleAlert className="w-3 h-3 text-amber-400" />;
+            textColor = 'text-amber-400';
+          } else if (isCurrent && step.status === 'active') {
+            statusIcon = <Loader2 className="w-3 h-3 animate-spin text-accent" />;
+            textColor = 'text-accent';
+          } else {
+            statusIcon = null;
+            textColor = 'text-text-muted/50';
+          }
+
+          return (
+            <div key={s.key} className="flex items-center gap-1">
+              {i > 0 && (
+                <div className={`w-4 h-px mx-0.5 ${isPast || (isCurrent && step.status !== 'active') ? 'bg-emerald-400/40' : 'bg-border-subtle'}`} />
+              )}
+              <div className={`flex items-center gap-1 text-[11px] ${textColor}`}>
+                {statusIcon || <Icon className="w-3 h-3" />}
+                <span>{s.label}</span>
+                {isCurrent && step.status === 'warn' && 'detail' in step && (
+                  <span className="text-[10px] text-amber-400/70">({step.detail})</span>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 export const RightPanel = () => {
   const {
     isRightPanelOpen,
@@ -24,7 +82,7 @@ export const RightPanel = () => {
     currentToolCalls,
     agentError,
     isAgentReady,
-    isAgentInitializing,
+    agentInitStep,
     sendChatMessage,
     stopChatResponse,
     clearChat,
@@ -381,18 +439,16 @@ export const RightPanel = () => {
           {/* Status bar */}
           <div className="flex items-center gap-2.5 px-4 py-3 bg-elevated/50 border-b border-border-subtle">
             <div className="ml-auto flex items-center gap-2">
-              {!isAgentReady && (
+              {!isProviderConfigured() && (
                 <span className="text-[11px] px-2 py-1 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30">
                   Configure AI
                 </span>
               )}
-              {isAgentInitializing && (
-                <span className="text-[11px] px-2 py-1 rounded-full bg-surface border border-border-subtle flex items-center gap-1 text-text-muted">
-                  <Loader2 className="w-3 h-3 animate-spin" /> Connecting
-                </span>
-              )}
             </div>
           </div>
+
+          {/* Stepped init progress */}
+          {agentInitStep && <AgentInitProgress step={agentInitStep} />}
 
           {/* Status / errors */}
           {agentError && (
@@ -431,18 +487,18 @@ export const RightPanel = () => {
                 {/* Report Generation */}
                 <div className="mt-4 pt-4 border-t border-border-subtle w-full">
                   <p className="text-xs text-text-muted mb-3">Generate Reports</p>
-                  <div className="flex flex-col gap-2 w-full">
+                  <div className="grid grid-cols-3 gap-2 w-full">
                     {reportPrompts.map((rp) => {
                       const Icon = getReportIcon(rp.type);
                       return (
                         <button
                           key={rp.type}
                           onClick={() => handleReportPrompt(rp)}
-                          disabled={!isAgentReady && !isAgentInitializing}
-                          className="flex items-center gap-2 px-3 py-2 bg-elevated border border-border-subtle rounded-lg text-xs text-text-secondary hover:border-accent hover:text-text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          disabled={!isProviderConfigured()}
+                          className="flex flex-col items-center gap-1.5 px-2 py-3 bg-elevated border border-border-subtle rounded-xl text-xs text-text-secondary hover:border-accent hover:text-text-primary hover:bg-surface transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                          <Icon className="w-3.5 h-3.5" />
-                          {rp.label}
+                          <Icon className="w-4 h-4" />
+                          <span className="text-center text-[10px] leading-tight">{rp.label}</span>
                         </button>
                       );
                     })}
@@ -671,14 +727,10 @@ export const RightPanel = () => {
                 </button>
               )}
             </div>
-            {!isAgentReady && !isAgentInitializing && (
+            {!isProviderConfigured() && (
               <div className="mt-2 text-xs text-amber-200 flex items-center gap-2">
                 <AlertTriangle className="w-3.5 h-3.5" />
-                <span>
-                  {isProviderConfigured()
-                    ? 'Initializing AI agent...'
-                    : 'Configure an LLM provider to enable chat.'}
-                </span>
+                <span>Configure an LLM provider to enable chat.</span>
               </div>
             )}
           </div>

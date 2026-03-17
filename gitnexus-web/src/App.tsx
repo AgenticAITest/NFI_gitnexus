@@ -17,11 +17,12 @@ import { getActiveProviderConfig } from './core/llm/settings-service';
 import { createKnowledgeGraph } from './core/graph/graph';
 import { connectToServer, fetchRepos, normalizeServerUrl, reindexRepo, deleteRepo as deleteRepoApi, type ConnectToServerResult } from './services/server-connection';
 import { Shield, LogOut, User } from 'lucide-react';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 const AppContent = () => {
   const {
     viewMode, setViewMode, setGraph, setFileContents, setProgress, setProjectName,
-    progress, isRightPanelOpen, runPipeline, runPipelineFromFiles, loadServerGraph,
+    progress, isRightPanelOpen, runPipeline, runPipelineFromFiles,
     isSettingsPanelOpen, setSettingsPanelOpen, isAddRepoModalOpen, setAddRepoModalOpen,
     refreshLLMSettings, initializeAgent, startEmbeddings, codeReferences,
     selectedNode, isCodePanelOpen, serverBaseUrl, setServerBaseUrl,
@@ -123,10 +124,11 @@ const AppContent = () => {
     for (const [p, content] of Object.entries(result.fileContents)) fileMap.set(p, content);
     setFileContents(fileMap);
     setViewMode('exploring');
-    // Server mode uses HTTP-backed agent — skip browser KuzuDB WASM load
-    if (getActiveProviderConfig()) await initializeAgent(projectName);
-    startEmbeddingsWithFallback();
-  }, [setViewMode, setGraph, setFileContents, setProjectName, loadServerGraph, initializeAgent, startEmbeddingsWithFallback]);
+    // Agent initializes lazily on first chat message via HTTP-backed tools.
+    // No browser-side KuzuDB WASM load — it's 512MB and risks OOM tab crashes.
+    // No browser-side embeddings — the server provides hybrid search via /api/search.
+    // Starting embeddings here would block the worker thread and prevent agent init.
+  }, [setViewMode, setGraph, setFileContents, setProjectName]);
 
   const onServerConnected = useCallback(async (result: ConnectToServerResult, serverUrl?: string) => {
     await handleServerConnect(result);
@@ -248,18 +250,20 @@ const AppContent = () => {
         onLogout={user ? () => logout() : undefined}
       />
 
-      <main className="flex-1 flex min-h-0">
-        <FileTreePanel onFocusNode={handleFocusNode} />
-        <div className="flex-1 relative min-w-0">
-          <GraphCanvas ref={graphCanvasRef} />
-          {isCodePanelOpen && (codeReferences.length > 0 || !!selectedNode) && (
-            <div className="absolute inset-y-0 left-0 z-30 pointer-events-auto">
-              <CodeReferencesPanel onFocusNode={handleFocusNode} />
-            </div>
-          )}
-        </div>
-        {isRightPanelOpen && <RightPanel />}
-      </main>
+      <ErrorBoundary fallbackMessage="A rendering error occurred. Your data is safe — click Retry to recover.">
+        <main className="flex-1 flex min-h-0">
+          <FileTreePanel onFocusNode={handleFocusNode} />
+          <div className="flex-1 relative min-w-0">
+            <GraphCanvas ref={graphCanvasRef} />
+            {isCodePanelOpen && (codeReferences.length > 0 || !!selectedNode) && (
+              <div className="absolute inset-y-0 left-0 z-30 pointer-events-auto">
+                <CodeReferencesPanel onFocusNode={handleFocusNode} />
+              </div>
+            )}
+          </div>
+          {isRightPanelOpen && <RightPanel />}
+        </main>
+      </ErrorBoundary>
 
       <StatusBar />
 

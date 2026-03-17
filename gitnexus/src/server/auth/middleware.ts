@@ -5,7 +5,7 @@ import { getAuthDb, isSetupComplete } from './db.js';
 import type { JwtPayload, DbUser } from './types.js';
 
 const JWT_SECRET = process.env.GITNEXUS_JWT_SECRET || 'gitnexus-dev-secret-change-in-production';
-const ACCESS_TOKEN_EXPIRY = '15m';
+const ACCESS_TOKEN_EXPIRY = '7d';
 const REFRESH_TOKEN_EXPIRY_DAYS = 7;
 
 export { JWT_SECRET, ACCESS_TOKEN_EXPIRY, REFRESH_TOKEN_EXPIRY_DAYS };

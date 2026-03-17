@@ -1,38 +1,79 @@
+console.log(`[WORKER] ⏱ Module top — ${performance.now().toFixed(0)}ms`);
 import * as Comlink from 'comlink';
-import { runIngestionPipeline, runPipelineFromFiles } from '../core/ingestion/pipeline';
-import { PipelineProgress, SerializablePipelineResult, serializePipelineResult } from '../types/pipeline';
-import { FileEntry } from '../services/zip';
-import { createKnowledgeGraph, type GraphNode, type GraphRelationship } from '../core/graph/types';
-import {
-  runEmbeddingPipeline,
-  semanticSearch as doSemanticSearch,
-  semanticSearchWithContext as doSemanticSearchWithContext,
-  type EmbeddingProgressCallback,
-} from '../core/embeddings/embedding-pipeline';
-import { isEmbedderReady, disposeEmbedder } from '../core/embeddings/embedder';
+// ── ONLY lightweight / type-only static imports ──────────────────────────
+// Everything heavy (LangChain, transformers.js, tree-sitter parsers, kuzu-wasm)
+// is loaded lazily on first use so the worker can process Comlink messages immediately.
+import { createKnowledgeGraph } from '../core/graph/graph';
+import type { GraphNode, GraphRelationship } from '../core/graph/types';
+import type { PipelineProgress, SerializablePipelineResult } from '../types/pipeline';
+import type { PipelineResult } from '../types/pipeline';
+import type { FileEntry } from '../services/zip';
 import type { EmbeddingProgress, SemanticSearchResult } from '../core/embeddings/types';
 import type { ProviderConfig, AgentStreamChunk } from '../core/llm/types';
-import { createGraphRAGAgent, streamAgentResponse, type AgentMessage, createChatModel } from '../core/llm/agent';
-import { SystemMessage } from '@langchain/core/messages';
-import { enrichClustersBatch, ClusterMemberInfo, ClusterEnrichment } from '../core/ingestion/cluster-enricher';
-import { CommunityNode } from '../core/ingestion/community-processor';
-import { PipelineResult } from '../types/pipeline';
-import { buildCodebaseContext, type CodebaseContext } from '../core/llm/context-builder';
-import { 
-  buildBM25Index, 
-  searchBM25, 
-  isBM25Ready, 
-  getBM25Stats,
-  mergeWithRRF,
-  type HybridSearchResult,
-} from '../core/search';
+import type { AgentMessage } from '../core/llm/agent';
+import type { ClusterMemberInfo, ClusterEnrichment } from '../core/ingestion/cluster-enricher';
+import type { CommunityNode } from '../core/ingestion/community-processor';
+import type { CodebaseContext } from '../core/llm/context-builder';
+import type { HybridSearchResult } from '../core/search';
+type EmbeddingProgressCallback = import('../core/embeddings/embedding-pipeline').EmbeddingProgressCallback;
 
-// Lazy import for Kuzu to avoid breaking worker if SharedArrayBuffer unavailable
+// ── Lazy module loaders ──────────────────────────────────────────────────
+let _pipeline: typeof import('../core/ingestion/pipeline') | null = null;
+const getPipeline = async () => {
+  if (!_pipeline) _pipeline = await import('../core/ingestion/pipeline');
+  return _pipeline;
+};
+
+let _agent: typeof import('../core/llm/agent') | null = null;
+const getAgent = async () => {
+  if (!_agent) _agent = await import('../core/llm/agent');
+  return _agent;
+};
+
+let _langchain: typeof import('@langchain/core/messages') | null = null;
+const getLangchain = async () => {
+  if (!_langchain) _langchain = await import('@langchain/core/messages');
+  return _langchain;
+};
+
+let _enricher: typeof import('../core/ingestion/cluster-enricher') | null = null;
+const getEnricher = async () => {
+  if (!_enricher) _enricher = await import('../core/ingestion/cluster-enricher');
+  return _enricher;
+};
+
+let _contextBuilder: typeof import('../core/llm/context-builder') | null = null;
+const getContextBuilder = async () => {
+  if (!_contextBuilder) _contextBuilder = await import('../core/llm/context-builder');
+  return _contextBuilder;
+};
+
+let _search: typeof import('../core/search') | null = null;
+const getSearch = async () => {
+  if (!_search) _search = await import('../core/search');
+  return _search;
+};
+
+let _pipelineTypes: typeof import('../types/pipeline') | null = null;
+const getPipelineTypes = async () => {
+  if (!_pipelineTypes) _pipelineTypes = await import('../types/pipeline');
+  return _pipelineTypes;
+};
+
+let embeddingModule: typeof import('../core/embeddings/embedding-pipeline') | null = null;
+let embedderModule: typeof import('../core/embeddings/embedder') | null = null;
+const getEmbeddingModule = async () => {
+  if (!embeddingModule) embeddingModule = await import('../core/embeddings/embedding-pipeline');
+  return embeddingModule;
+};
+const getEmbedderModule = async () => {
+  if (!embedderModule) embedderModule = await import('../core/embeddings/embedder');
+  return embedderModule;
+};
+
 let kuzuAdapter: typeof import('../core/kuzu/kuzu-adapter') | null = null;
 const getKuzuAdapter = async () => {
-  if (!kuzuAdapter) {
-    kuzuAdapter = await import('../core/kuzu/kuzu-adapter');
-  }
+  if (!kuzuAdapter) kuzuAdapter = await import('../core/kuzu/kuzu-adapter');
   return kuzuAdapter;
 };
 
@@ -44,7 +85,7 @@ let isEmbeddingComplete = false;
 let storedFileContents: Map<string, string> = new Map();
 
 // Agent state
-let currentAgent: ReturnType<typeof createGraphRAGAgent> | null = null;
+let currentAgent: any | null = null;
 let currentProviderConfig: ProviderConfig | null = null;
 let currentGraphResult: PipelineResult | null = null;
 
@@ -59,25 +100,18 @@ let chatCancelled = false;
 // HTTP helpers for backend mode
 // ============================================================
 
-const httpFetchWithTimeout = async (
+const httpFetch = async (
   url: string,
   init: RequestInit = {},
-  timeoutMs: number = 30_000,
 ): Promise<Response> => {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
+  return fetch(url, init);
 };
 
 const createHttpExecuteQuery = (backendUrl: string, repo: string, authToken?: string) => {
   return async (cypher: string): Promise<any[]> => {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
-    const response = await httpFetchWithTimeout(`${backendUrl}/api/query`, {
+    const response = await httpFetch(`${backendUrl}/api/query`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ cypher, repo }),
@@ -102,7 +136,7 @@ const createHttpHybridSearch = (backendUrl: string, repo: string, authToken?: st
     try {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
-      const response = await httpFetchWithTimeout(`${backendUrl}/api/search`, {
+      const response = await httpFetch(`${backendUrl}/api/search`, {
         method: 'POST',
         headers,
         body: JSON.stringify({ query, limit: k, repo }),
@@ -151,6 +185,12 @@ const createHttpHybridSearch = (backendUrl: string, repo: string, authToken?: st
  * allowing it to be called from the worker and have it execute on the main thread.
  */
 const workerApi = {
+  /** Simple ping to check if worker is responsive */
+  ping(): string {
+    console.log(`[WORKER] ping() called at ${performance.now().toFixed(0)}ms`);
+    return 'pong';
+  },
+
   /**
    * Run the ingestion pipeline in the worker thread
    * @param file - The ZIP file to process
@@ -165,14 +205,16 @@ const workerApi = {
     // Debug logging
     console.log('🔧 runPipeline called with clusteringConfig:', !!clusteringConfig);
     // Run the actual pipeline
-    const result = await runIngestionPipeline(file, onProgress);
+    const pipeline = await getPipeline();
+    const result = await pipeline.runIngestionPipeline(file, onProgress);
     currentGraphResult = result;
-    
+
     // Store file contents for grep/read tools (full content, not truncated)
     storedFileContents = result.fileContents;
-    
+
     // Build BM25 index for keyword search (instant, ~100ms)
-    const bm25DocCount = buildBM25Index(storedFileContents);
+    const search = await getSearch();
+    const bm25DocCount = search.buildBM25Index(storedFileContents);
     if (import.meta.env.DEV) {
       console.log(`🔍 BM25 index built: ${bm25DocCount} documents`);
     }
@@ -209,7 +251,8 @@ const workerApi = {
     }
     
     // Convert to serializable format for transfer back to main thread
-    return serializePipelineResult(result);
+    const ptypes = await getPipelineTypes();
+    return ptypes.serializePipelineResult(result);
   },
 
   /**
@@ -221,7 +264,9 @@ const workerApi = {
     relationships: GraphRelationship[],
     fileContents: Record<string, string>
   ): Promise<void> {
+    console.log(`[WORKER] >>> loadServerGraph ENTER — ${nodes.length} nodes, ${relationships.length} rels, ${Object.keys(fileContents).length} files`);
     const kuzu = await getKuzuAdapter();
+    console.log(`[WORKER] loadServerGraph — kuzu adapter loaded`);
     const graph = createKnowledgeGraph();
     for (const node of nodes) graph.addNode(node);
     for (const rel of relationships) graph.addRelationship(rel);
@@ -232,11 +277,19 @@ const workerApi = {
     // Store file contents for grep/read tools
     storedFileContents = fileMap;
 
+    // Reset KuzuDB so old repo data is cleared (initKuzu early-returns if already open)
+    console.log(`[WORKER] loadServerGraph — closing old KuzuDB...`);
+    await kuzu.closeKuzu();
+
     // Load into KuzuDB
+    console.log(`[WORKER] loadServerGraph — loading graph into KuzuDB...`);
     await kuzu.loadGraphToKuzu(graph, fileMap);
+    console.log(`[WORKER] loadServerGraph — building BM25 index...`);
 
     // Build BM25 search index
-    buildBM25Index(graph.nodes, fileMap);
+    const search = await getSearch();
+    search.buildBM25Index(fileMap);
+    console.log(`[WORKER] <<< loadServerGraph EXIT`);
   },
 
   /**
@@ -256,10 +309,14 @@ const workerApi = {
    * Check if the database is ready for queries
    */
   async isReady(): Promise<boolean> {
+    console.log(`[WORKER] >>> isReady ENTER`);
     try {
       const kuzu = await getKuzuAdapter();
-      return kuzu.isKuzuReady();
+      const ready = kuzu.isKuzuReady();
+      console.log(`[WORKER] <<< isReady EXIT — ${ready}`);
+      return ready;
     } catch {
+      console.log(`[WORKER] <<< isReady EXIT — false (error)`);
       return false;
     }
   },
@@ -296,14 +353,16 @@ const workerApi = {
     });
 
     // Run the pipeline
-    const result = await runPipelineFromFiles(files, onProgress);
+    const pl = await getPipeline();
+    const result = await pl.runPipelineFromFiles(files, onProgress);
     currentGraphResult = result;
-    
+
     // Store file contents for grep/read tools (full content, not truncated)
     storedFileContents = result.fileContents;
-    
+
     // Build BM25 index for keyword search (instant, ~100ms)
-    const bm25DocCount = buildBM25Index(storedFileContents);
+    const search = await getSearch();
+    const bm25DocCount = search.buildBM25Index(storedFileContents);
     if (import.meta.env.DEV) {
       console.log(`🔍 BM25 index built: ${bm25DocCount} documents`);
     }
@@ -340,7 +399,8 @@ const workerApi = {
     }
     
     // Convert to serializable format for transfer back to main thread
-    return serializePipelineResult(result);
+    const ptypes = await getPipelineTypes();
+    return ptypes.serializePipelineResult(result);
   },
 
   // ============================================================
@@ -357,8 +417,10 @@ const workerApi = {
     onProgress: (progress: EmbeddingProgress) => void,
     forceDevice?: 'webgpu' | 'wasm'
   ): Promise<void> {
+    console.log(`[WORKER] >>> startEmbeddingPipeline ENTER — device=${forceDevice || 'auto'}`);
     const kuzu = await getKuzuAdapter();
     if (!kuzu.isKuzuReady()) {
+      console.log(`[WORKER] <<< startEmbeddingPipeline EXIT — DB not ready, throwing`);
       throw new Error('Database not ready. Please load a repository first.');
     }
 
@@ -374,9 +436,10 @@ const workerApi = {
       onProgress(progress);
     };
 
-    await runEmbeddingPipeline(
-      kuzu.executeQuery, 
-      kuzu.executeWithReusedStatement, 
+    const emb = await getEmbeddingModule();
+    await emb.runEmbeddingPipeline(
+      kuzu.executeQuery,
+      kuzu.executeWithReusedStatement,
       progressCallback,
       forceDevice ? { device: forceDevice } : {}
     );
@@ -440,7 +503,8 @@ const workerApi = {
       throw new Error('Embeddings not ready. Please wait for embedding pipeline to complete.');
     }
 
-    return doSemanticSearch(kuzu.executeQuery, query, k, maxDistance);
+    const emb = await getEmbeddingModule();
+    return emb.semanticSearch(kuzu.executeQuery, query, k, maxDistance);
   },
 
   /**
@@ -464,7 +528,8 @@ const workerApi = {
       throw new Error('Embeddings not ready. Please wait for embedding pipeline to complete.');
     }
 
-    return doSemanticSearchWithContext(kuzu.executeQuery, query, k, hops);
+    const emb = await getEmbeddingModule();
+    return emb.semanticSearchWithContext(kuzu.executeQuery, query, k, hops);
   },
 
   /**
@@ -479,49 +544,56 @@ const workerApi = {
     query: string,
     k: number = 10
   ): Promise<HybridSearchResult[]> {
-    if (!isBM25Ready()) {
+    const search = await getSearch();
+    if (!search.isBM25Ready()) {
       throw new Error('Search index not ready. Please load a repository first.');
     }
-    
+
     // Get BM25 results (always available after ingestion)
-    const bm25Results = searchBM25(query, k * 3);  // Get more for better RRF merge
-    
+    const bm25Results = search.searchBM25(query, k * 3);
+
     // Get semantic results if embeddings are ready
     let semanticResults: SemanticSearchResult[] = [];
     if (isEmbeddingComplete) {
       try {
         const kuzu = await getKuzuAdapter();
         if (kuzu.isKuzuReady()) {
-          semanticResults = await doSemanticSearch(kuzu.executeQuery, query, k * 3, 0.5);
+          const emb = await getEmbeddingModule();
+          semanticResults = await emb.semanticSearch(kuzu.executeQuery, query, k * 3, 0.5);
         }
       } catch {
         // Semantic search failed, continue with BM25 only
       }
     }
-    
+
     // Merge with RRF
-    return mergeWithRRF(bm25Results, semanticResults, k);
+    return search.mergeWithRRF(bm25Results, semanticResults, k);
   },
 
   /**
    * Check if BM25 search index is ready
    */
-  isBM25Ready(): boolean {
-    return isBM25Ready();
+  async isBM25Ready(): Promise<boolean> {
+    const search = await getSearch();
+    return search.isBM25Ready();
   },
 
   /**
    * Get BM25 index statistics
    */
-  getBM25Stats(): { documentCount: number; termCount: number } {
-    return getBM25Stats();
+  async getBM25Stats(): Promise<{ documentCount: number; termCount: number }> {
+    const search = await getSearch();
+    return search.getBM25Stats();
   },
 
   /**
    * Check if the embedding model is loaded and ready
    */
-  isEmbeddingModelReady(): boolean {
-    return isEmbedderReady();
+  async isEmbeddingModelReady(): Promise<boolean> {
+    try {
+      const mod = await getEmbedderModule();
+      return mod.isEmbedderReady();
+    } catch { return false; }
   },
 
   /**
@@ -542,7 +614,8 @@ const workerApi = {
    * Cleanup embedding model resources
    */
   async disposeEmbeddingModel(): Promise<void> {
-    await disposeEmbedder();
+    const mod = await getEmbedderModule();
+    await mod.disposeEmbedder();
     isEmbeddingComplete = false;
     embeddingProgress = null;
   },
@@ -581,33 +654,34 @@ const workerApi = {
         if (!isEmbeddingComplete) {
           throw new Error('Embeddings not ready');
         }
-        return doSemanticSearch(kuzu.executeQuery, query, k, maxDistance);
+        const emb = await getEmbeddingModule();
+    return emb.semanticSearch(kuzu.executeQuery, query, k, maxDistance);
       };
 
       const semanticSearchWithContextWrapper = async (query: string, k?: number, hops?: number) => {
         if (!isEmbeddingComplete) {
           throw new Error('Embeddings not ready');
         }
-        return doSemanticSearchWithContext(kuzu.executeQuery, query, k, hops);
+        const emb = await getEmbeddingModule();
+    return emb.semanticSearchWithContext(kuzu.executeQuery, query, k, hops);
       };
 
       // Hybrid search wrapper - combines BM25 + semantic
       const hybridSearchWrapper = async (query: string, k?: number) => {
-        // Get BM25 results (always available after ingestion)
-        const bm25Results = searchBM25(query, (k ?? 10) * 3);
-        
-        // Get semantic results if embeddings are ready
+        const search = await getSearch();
+        const bm25Results = search.searchBM25(query, (k ?? 10) * 3);
+
         let semanticResults: any[] = [];
         if (isEmbeddingComplete) {
           try {
-            semanticResults = await doSemanticSearch(kuzu.executeQuery, query, (k ?? 10) * 3, 0.5);
+            const emb = await getEmbeddingModule();
+            semanticResults = await emb.semanticSearch(kuzu.executeQuery, query, (k ?? 10) * 3, 0.5);
           } catch {
             // Semantic search failed, continue with BM25 only
           }
         }
-        
-        // Merge with RRF
-        return mergeWithRRF(bm25Results, semanticResults, k ?? 10);
+
+        return search.mergeWithRRF(bm25Results, semanticResults, k ?? 10);
       };
 
       // Use provided projectName, or fallback to 'project' if not provided
@@ -618,7 +692,8 @@ const workerApi = {
       
       let codebaseContext;
       try {
-        codebaseContext = await buildCodebaseContext(kuzu.executeQuery, resolvedProjectName);
+        const ctxBuilder = await getContextBuilder();
+        codebaseContext = await ctxBuilder.buildCodebaseContext(kuzu.executeQuery, resolvedProjectName);
         if (import.meta.env.DEV) {
           console.log('📊 Codebase context built:', {
             files: codebaseContext.stats.fileCount,
@@ -630,14 +705,16 @@ const workerApi = {
         console.warn('Failed to build codebase context, proceeding without:', err);
       }
 
-      currentAgent = createGraphRAGAgent(
+      const agentMod = await getAgent();
+      const search = await getSearch();
+      currentAgent = agentMod.createGraphRAGAgent(
         config,
         kuzu.executeQuery,
         semanticSearchWrapper,
         semanticSearchWithContextWrapper,
         hybridSearchWrapper,
         () => isEmbeddingComplete,
-        () => isBM25Ready(),
+        () => search.isBM25Ready(),
         storedFileContents,
         codebaseContext
       );
@@ -675,27 +752,37 @@ const workerApi = {
     authToken?: string,
   ): Promise<{ success: boolean; error?: string }> {
     try {
+      console.log(`[initializeBackendAgent] START — ${fileContentsEntries.length} files, backend=${backendUrl}, repo=${repoName}`);
+      const t0 = performance.now();
+
       // Rebuild Map from serializable entries (Comlink can't transfer Maps)
       const contents = new Map<string, string>(fileContentsEntries);
       storedFileContents = contents;
+      console.log(`[initializeBackendAgent] Map rebuilt in ${(performance.now() - t0).toFixed(0)}ms`);
 
       // Create HTTP-based tool wrappers (pass auth token for authenticated servers)
       const executeQuery = createHttpExecuteQuery(backendUrl, repoName, authToken);
       const hybridSearch = createHttpHybridSearch(backendUrl, repoName, authToken);
 
-      // Build codebase context (uses Cypher queries — works via HTTP)
+      // Build codebase context (uses Cypher queries via HTTP).
+      // Non-fatal — agent works without context.
       let codebaseContext: CodebaseContext | undefined;
       try {
-        codebaseContext = await buildCodebaseContext(executeQuery, projectName || repoName);
-      } catch {
+        console.log(`[initializeBackendAgent] Loading context-builder module...`);
+        const ctxBuilder = await getContextBuilder();
+        console.log(`[initializeBackendAgent] Context-builder loaded, building context via HTTP...`);
+        codebaseContext = await ctxBuilder.buildCodebaseContext(executeQuery, projectName || repoName);
+      } catch (ctxErr) {
         // Non-fatal — agent works without context
+        console.warn(`[initializeBackendAgent] Context build failed (non-fatal):`, ctxErr);
       }
+      console.log(`[initializeBackendAgent] Context done in ${(performance.now() - t0).toFixed(0)}ms`);
 
       // Create agent with HTTP-backed tools.
-      // hybridSearch calls /api/search which runs full BM25 + semantic + RRF on the server.
-      // isEmbeddingReady is false — no local embedding model is loaded in backend mode.
-      // isBM25Ready is true — BM25 is available via the server's hybrid search.
-      currentAgent = createGraphRAGAgent(
+      console.log(`[initializeBackendAgent] Loading agent module...`);
+      const agentMod = await getAgent();
+      console.log(`[initializeBackendAgent] Agent module loaded, creating agent...`);
+      currentAgent = agentMod.createGraphRAGAgent(
         config,
         executeQuery,          // Cypher via HTTP
         hybridSearch,          // semanticSearch → server hybrid search
@@ -708,10 +795,7 @@ const workerApi = {
       );
 
       currentProviderConfig = config;
-
-      if (import.meta.env.DEV) {
-        console.log('🤖 Backend agent initialized with provider:', config.provider);
-      }
+      console.log(`[initializeBackendAgent] DONE in ${(performance.now() - t0).toFixed(0)}ms`);
 
       return { success: true };
     } catch (err: any) {
@@ -726,6 +810,7 @@ const workerApi = {
    * Check if the agent is initialized
    */
   isAgentReady(): boolean {
+    console.log(`[WORKER] >>> isAgentReady ENTER — agent=${currentAgent !== null}`);
     return currentAgent !== null;
   },
 
@@ -758,21 +843,30 @@ const workerApi = {
     chatCancelled = false;
 
     try {
-      for await (const chunk of streamAgentResponse(currentAgent, messages)) {
+      const agentMod = await getAgent();
+      for await (const chunk of agentMod.streamAgentResponse(currentAgent, messages)) {
         if (chatCancelled) {
-          onChunk({ type: 'done' });
+          await onChunk({ type: 'done' });
           break;
         }
-        onChunk(chunk);
+        // Await the Comlink proxy call to maintain back-pressure and catch
+        // serialization/disconnection errors instead of losing them silently.
+        try {
+          await onChunk(chunk);
+        } catch (proxyErr) {
+          console.error('[chatStream] onChunk proxy error — main thread callback may have disconnected:', proxyErr);
+          break;
+        }
       }
     } catch (error) {
       if (chatCancelled) {
         // Swallow errors from cancellation
-        onChunk({ type: 'done' });
+        try { await onChunk({ type: 'done' }); } catch { /* proxy may be gone */ }
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
-      onChunk({ type: 'error', error: message });
+      console.error('[chatStream] Stream error:', message, error);
+      try { await onChunk({ type: 'error', error: message }); } catch { /* proxy may be gone */ }
     }
   },
 
@@ -846,11 +940,13 @@ const workerApi = {
     });
 
     // Create LLM client adapter for LangChain model
-    const chatModel = createChatModel(providerConfig);
+    const agentMod = await getAgent();
+    const lc = await getLangchain();
+    const chatModel = agentMod.createChatModel(providerConfig);
     const llmClient = {
       generate: async (prompt: string): Promise<string> => {
         const response = await chatModel.invoke([
-          new SystemMessage('You are a helpful code analysis assistant.'),
+          new lc.SystemMessage('You are a helpful code analysis assistant.'),
           { role: 'user', content: prompt }
         ]);
         return response.content as string;
@@ -858,7 +954,8 @@ const workerApi = {
     };
 
     // Run enrichment
-    const { enrichments, tokensUsed } = await enrichClustersBatch(
+    const enricherMod = await getEnricher();
+    const { enrichments, tokensUsed } = await enricherMod.enrichClustersBatch(
       communityNodes,
       memberMap,
       llmClient,
@@ -924,7 +1021,9 @@ const workerApi = {
 };
 
 // Expose the worker API to the main thread
+console.log(`[WORKER] ⏱ About to Comlink.expose — ${performance.now().toFixed(0)}ms`);
 Comlink.expose(workerApi);
+console.log(`[WORKER] ⏱ Comlink.expose done — ${performance.now().toFixed(0)}ms`);
 
 // TypeScript type for the exposed API (used by the hook)
 export type IngestionWorkerApi = typeof workerApi;

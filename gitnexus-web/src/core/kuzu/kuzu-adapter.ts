@@ -29,22 +29,27 @@ export const initKuzu = async () => {
   if (conn) return { db, conn, kuzu };
 
   try {
-    if (import.meta.env.DEV) console.log('🚀 Initializing KuzuDB...');
+    // If WASM module is already loaded (warm re-init after closeKuzu), skip import
+    if (!kuzu) {
+      if (import.meta.env.DEV) console.log('🚀 Initializing KuzuDB WASM module...');
 
-    // 1. Dynamic Import (Fixes the "not a function" bundler issue)
-    const kuzuModule = await import('kuzu-wasm');
-    
-    // 2. Handle Vite/Webpack "default" wrapping
-    kuzu = kuzuModule.default || kuzuModule;
+      // 1. Dynamic Import (Fixes the "not a function" bundler issue)
+      const kuzuModule = await import('kuzu-wasm');
 
-    // 3. Initialize WASM
-    await kuzu.init();
-    
+      // 2. Handle Vite/Webpack "default" wrapping
+      kuzu = kuzuModule.default || kuzuModule;
+
+      // 3. Initialize WASM
+      await kuzu.init();
+    } else {
+      if (import.meta.env.DEV) console.log('♻️ Reusing warm KuzuDB WASM module');
+    }
+
     // 4. Create Database with 512MB buffer pool
     const BUFFER_POOL_SIZE = 512 * 1024 * 1024; // 512MB
     db = new kuzu.Database(':memory:', BUFFER_POOL_SIZE);
     conn = new kuzu.Connection(db);
-    
+
     if (import.meta.env.DEV) console.log('✅ KuzuDB WASM Initialized');
 
     // 5. Initialize Schema (all node tables, then rel tables, then embedding table)
@@ -58,7 +63,7 @@ export const initKuzu = async () => {
         }
       }
     }
-    
+
     if (import.meta.env.DEV) console.log('✅ KuzuDB Multi-Table Schema Created');
 
     return { db, conn, kuzu };
@@ -358,7 +363,9 @@ export const isKuzuReady = (): boolean => {
 };
 
 /**
- * Close the database connection (cleanup)
+ * Close the database connection (cleanup).
+ * Keeps the WASM module loaded so re-init only needs a new DB + schema,
+ * avoiding a costly WASM re-download/compile cycle.
  */
 export const closeKuzu = async (): Promise<void> => {
   if (conn) {
@@ -373,7 +380,7 @@ export const closeKuzu = async (): Promise<void> => {
     } catch {}
     db = null;
   }
-  kuzu = null;
+  // Intentionally keep `kuzu` (WASM module) alive for fast re-init
 };
 
 /**

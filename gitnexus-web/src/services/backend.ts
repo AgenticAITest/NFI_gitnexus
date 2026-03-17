@@ -1,6 +1,5 @@
 /**
  * Stateless HTTP client for the local GitNexus backend server.
- * All functions use fetch() with AbortController timeouts.
  */
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -31,34 +30,26 @@ export const getBackendUrl = (): string => backendUrl;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-const DEFAULT_TIMEOUT_MS = 10_000;
 const PROBE_TIMEOUT_MS = 2_000;
 
 /**
- * Perform a fetch with an AbortController timeout.
- * Throws a cleaner error message on network failures.
+ * Perform a fetch. Throws a cleaner error message on network failures.
+ * For probes, pass an AbortSignal via init.signal.
  */
-const fetchWithTimeout = async (
+const backendFetch = async (
   url: string,
   init: RequestInit = {},
-  timeoutMs: number = DEFAULT_TIMEOUT_MS,
 ): Promise<Response> => {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
   try {
-    const response = await fetch(url, { ...init, signal: controller.signal });
-    return response;
+    return await fetch(url, init);
   } catch (error: unknown) {
     if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new Error(`Request to ${url} timed out after ${timeoutMs}ms`);
+      throw new Error(`Request to ${url} was aborted`);
     }
     if (error instanceof TypeError) {
       throw new Error(`Network error reaching GitNexus backend at ${backendUrl}: ${error.message}`);
     }
     throw error;
-  } finally {
-    clearTimeout(timer);
   }
 };
 
@@ -88,12 +79,17 @@ const assertOk = async (response: Response): Promise<void> => {
  */
 export const probeBackend = async (): Promise<boolean> => {
   try {
-    const response = await fetchWithTimeout(
-      `${backendUrl}/api/repos`,
-      {},
-      PROBE_TIMEOUT_MS,
-    );
-    return response.status === 200;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+    try {
+      const response = await backendFetch(
+        `${backendUrl}/api/repos`,
+        { signal: controller.signal },
+      );
+      return response.status === 200;
+    } finally {
+      clearTimeout(timer);
+    }
   } catch {
     return false;
   }
@@ -103,7 +99,7 @@ export const probeBackend = async (): Promise<boolean> => {
  * Fetch the list of indexed repositories.
  */
 export const fetchRepos = async (): Promise<BackendRepo[]> => {
-  const response = await fetchWithTimeout(`${backendUrl}/api/repos`);
+  const response = await backendFetch(`${backendUrl}/api/repos`);
   await assertOk(response);
   return response.json() as Promise<BackendRepo[]>;
 };
@@ -114,11 +110,8 @@ export const fetchRepos = async (): Promise<BackendRepo[]> => {
 export const fetchGraph = async (
   repo: string,
 ): Promise<{ nodes: unknown[]; relationships: unknown[] }> => {
-  // Graph loading can take a while for large repos — use 60s timeout
-  const response = await fetchWithTimeout(
+  const response = await backendFetch(
     `${backendUrl}/api/graph?repo=${encodeURIComponent(repo)}`,
-    {},
-    60_000,
   );
   await assertOk(response);
   return response.json() as Promise<{ nodes: unknown[]; relationships: unknown[] }>;
@@ -132,7 +125,7 @@ export const runCypherQuery = async (
   repo: string,
   cypher: string,
 ): Promise<unknown[]> => {
-  const response = await fetchWithTimeout(`${backendUrl}/api/query`, {
+  const response = await backendFetch(`${backendUrl}/api/query`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ cypher, repo }),
@@ -154,7 +147,7 @@ export const runSearch = async (
   query: string,
   limit?: number,
 ): Promise<unknown> => {
-  const response = await fetchWithTimeout(`${backendUrl}/api/search`, {
+  const response = await backendFetch(`${backendUrl}/api/search`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ query, limit, repo }),
@@ -170,7 +163,7 @@ export const fetchFileContent = async (
   repo: string,
   filePath: string,
 ): Promise<string> => {
-  const response = await fetchWithTimeout(
+  const response = await backendFetch(
     `${backendUrl}/api/file?repo=${encodeURIComponent(repo)}&path=${encodeURIComponent(filePath)}`,
   );
   await assertOk(response);
@@ -183,7 +176,7 @@ export const fetchFileContent = async (
  * Fetch all execution-flow processes for a repository.
  */
 export const fetchProcesses = async (repo: string): Promise<unknown> => {
-  const response = await fetchWithTimeout(
+  const response = await backendFetch(
     `${backendUrl}/api/processes?repo=${encodeURIComponent(repo)}`,
   );
   await assertOk(response);
@@ -197,7 +190,7 @@ export const fetchProcessDetail = async (
   repo: string,
   name: string,
 ): Promise<unknown> => {
-  const response = await fetchWithTimeout(
+  const response = await backendFetch(
     `${backendUrl}/api/process?repo=${encodeURIComponent(repo)}&name=${encodeURIComponent(name)}`,
   );
   await assertOk(response);
@@ -208,7 +201,7 @@ export const fetchProcessDetail = async (
  * Fetch all functional-area clusters for a repository.
  */
 export const fetchClusters = async (repo: string): Promise<unknown> => {
-  const response = await fetchWithTimeout(
+  const response = await backendFetch(
     `${backendUrl}/api/clusters?repo=${encodeURIComponent(repo)}`,
   );
   await assertOk(response);
@@ -222,7 +215,7 @@ export const fetchClusterDetail = async (
   repo: string,
   name: string,
 ): Promise<unknown> => {
-  const response = await fetchWithTimeout(
+  const response = await backendFetch(
     `${backendUrl}/api/cluster?repo=${encodeURIComponent(repo)}&name=${encodeURIComponent(name)}`,
   );
   await assertOk(response);
